@@ -1,9 +1,12 @@
 # ---------------------------------------------------------------------------
 # Local-only documents (deliberately NOT shared in this repo)
 # ---------------------------------------------------------------------------
-# The house style guide stays on disk. The app's contract is SPEC.md (tracked);
-# CODE_STYLE.md is the internal guide and is excluded on purpose.
+# The app's contract is SPEC.md and the roadmap is todo.md (both tracked). These stay on
+# disk only:
+#   CODE_STYLE.md — internal house style guide
+#   lessons.md    — measured Electrobun traps/lessons (may name machine-local paths)
 CODE_STYLE.md
+lessons.md
 
 # ---------------------------------------------------------------------------
 # Dependencies
