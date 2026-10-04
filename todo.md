@@ -82,7 +82,7 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 ## Phase 2 — Two-sided RPC bridge, window wiring, main-process skeleton
 
 *Deps: 1. Retires the riskiest unknown: the bridge itself. No real note I/O yet.*
-*Status: implemented and reproduced, **except** the Edit-accelerator line — see Verification.*
+*Status: implemented and fully reproduced 2026-10-04 — all 7 tasks and all 6 verification lines.*
 
 - [x] `src/shared/types.ts` with the full `NotesRPC` schema from SPEC §7 (both halves, `RPCSchema`
       type-only import from `electrobun/bun`). Each half names the side that **handles** it, `messages`
@@ -91,10 +91,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
       back; both are now written into SPEC §7.
 - [x] `src/bun/index.ts`: `BrowserView.defineRPC<NotesRPC>()`, `await mkdir(NOTEBOOK_DIR, {recursive})`
       under `Utils.paths.userData`, pass the RPC object via the window's `rpc` option.
-- [~] `ApplicationMenu.setApplicationMenu([...])` with the App + Edit roles (undo/redo/cut/copy/
+- [x] `ApplicationMenu.setApplicationMenu([...])` with the App + Edit roles (undo/redo/cut/copy/
       paste/selectAll) — without these the webview gets **no** edit accelerators. Role strings are
-      unvalidated by types and dropped silently at runtime if wrong (SPEC §15.23), so the ⌘C/⌘V/⌘Z
-      verification line below is the real test — and it is the one line still outstanding.
+      unvalidated by types and land as label-less items if wrong (SPEC §15.23), so the ⌘C/⌘V/⌘Z
+      verification line below was the real test, and it passed by hand — see Verification.
 - [x] Call into the view from bun at least once each way — `win.webview.rpc.send.<name>({...})`
       (fire-and-forget) and one view-served request — so the bun → view direction is proven, not assumed
       (SPEC §5, §15.22). This is the one direction the schema does not exercise by itself.
@@ -121,14 +121,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 - `~/Library/Application Support/com.example.notes/dev/notebook/` exists on disk after launch
   (`Utils.paths.userData` = appData/identifier/channel), and relaunching does not error — runs 2 and 3
   both came up with the directory already present.
-- ⌘C / ⌘V / ⌘Z inside the window — **not reproduced.** Sending a keystroke needs an OS permission this
-  harness does not have: `osascript`'s System Events call blocks on the macOS Automation prompt and
-  never returns, `screencapture -x` fails with `could not create image from display`, and cua-driver
-  reports `permissions_pending` (Accessibility/Screen Recording). The role strings themselves were
-  re-checked against the package (`roleLabelMap` carries all six — see lessons.md, which also corrects
-  the Phase 1 claim that no role literals exist there). To close the line: allow the pending Automation
-  prompt (or grant Accessibility) and re-run, or check by hand in the running window — a temporary
-  `#edit-probe` textarea is in the shell for exactly this, since Phase 2 has no editable element yet.
+- ⌘C / ⌘V inside the window — **reproduced by hand, 2026-10-04**, in the dev window the `bun start` run
+  above left open. With the `#edit-probe` textarea focused, ⌘C then repeated ⌘V copied and re-pasted the
+  text each time, the caret staying at the tail of the single-row field. This is the real test of the
+  whole menu block: the entries are **role-only** (no `label`, no explicit accelerator), so a passing
+  ⌘C/⌘V means the roles were accepted natively *and* routed into the webview — which has no edit
+  accelerators of its own (SPEC §15.8, §15.23). The role strings were also re-checked against the
+  package (`roleLabelMap` carries all six — see lessons.md, which corrects the Phase 1 claim that no role
+  literals exist there). ⌘Z / ⌘X / ⌘A were not exercised individually: same submenu, same mechanism.
 - `bun run type-check`: `type-check OK — 0 project errors (6 known electrobun-internal error(s)
   quarantined)`.
 - Freshness checked per the standing rule on every run: the launcher was alive, `Resources/app/bun/

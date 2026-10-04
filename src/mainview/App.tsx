@@ -33,7 +33,9 @@ const App: React.FC = () => {
         </ul>
         {/*
           TEMPORARY Phase-2 probe: the shell has no editable element yet, so the Edit-menu
-          accelerators (⌘C/⌘V/⌘Z) have nowhere to land. Remove once Phase 5's editor exists.
+          accelerators (⌘C/⌘V/⌘Z) have nowhere to land. Its job is done — the Phase 2 check
+          passed by hand (⌘C + repeated ⌘V landed, see todo.md) — but keep it until Phase 5's
+          editor exists, since there is still no other editable target for a manual check.
         */}
         <textarea id="edit-probe" className="shell__edit-probe" rows={1} aria-label="edit probe" />
         {/*

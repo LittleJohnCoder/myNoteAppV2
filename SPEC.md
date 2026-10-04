@@ -1,8 +1,8 @@
 # SPEC — Obsidian-like Note-Taking App (Electrobun v1)
 
 Status: draft — §15.14–23 verified against the installed `electrobun@1.18.1`
-(§15.14–20 in Phase 1 by reading the package; §15.21–23 exercised by Phase 2's live
-bridge run); the rest is still documentation-derived.
+(§15.14–20 in Phase 1 by reading the package; §15.21–22 by Phase 2's live bridge run;
+§15.23 behaviourally — the Phase 2 window's ⌘C/⌘V); the rest is still documentation-derived.
 Target framework: **Electrobun v1** (pinned `1.18.1`)
 Supersedes: `../myNotesApp/SPEC.md`
 Scope: product behaviour **plus** the exact Electrobun v1 integration contract
@@ -532,7 +532,10 @@ export to HTML/PDF.
    probe is the point: a channel-only check would blank the window whenever Vite is not
    running, breaking plain `bun start`. Both branches verified (§4.3 scripts).
 8. **Clipboard/undo/edit accelerators come from the ApplicationMenu**, not from
-   the webview. Wire the Edit roles even though formatting is toolbar-only.[4]
+   the webview. Wire the Edit roles even though formatting is toolbar-only — verified in
+   Phase 2: with role-only entries (no labels, no explicit accelerators) ⌘C and repeated ⌘V
+   do reach the webview, and a webview without those roles gets no edit accelerators at
+   all.[4]
 9. **Paths.** Writable data → `Utils.paths.userData`[8]; read-only bundles →
    `PATHS.VIEWS_FOLDER` / `PATHS.RESOURCES_FOLDER`[7]. Never write to `views/`.
 10. **Packaging.** `electrobun build --env=canary|stable`; per-OS `bundleCEF`
@@ -603,9 +606,12 @@ Checked against `node_modules/electrobun@1.18.1` and a real `bun start` run — 
     script in the view and returns its value. Bun reaches it via `win.webview.rpc.request.
     evaluateJavascriptWithResponse({ script })` — only if the schema declares it, since the built-in is not
     merged into the bun-side types. Plain `executeJavascript(js)` stays fire-and-forget.[6][11]
-23. **Menu `role` strings are unvalidated.** `ApplicationMenuItemConfig.role` is typed `string`, and no role
-    literal appears anywhere in the package, so a wrong role type-checks fine and is dropped at runtime on
-    the native side. `⌘C`/`⌘V`/`⌘Z` inside the window is the only real test (§4.3 verification).[4]
+23. **Menu `role` strings are unvalidated, though labels are not required.** `ApplicationMenuItemConfig.role`
+    is typed `string` rather than a union, so a wrong role type-checks fine and is forwarded to the native
+    side, where an unknown selector lands as a **label-less item** rather than an error. Omitting `label` is
+    correct: `core/menuRoles.ts` ships `roleLabelMap` and `menuConfigWithDefaults` fills the label from it
+    (`{ role: "copy" }` → "Copy"). Only a behavioural test proves the roles are wired, and it passed in
+    Phase 2 — role-only App/Edit entries installed and ⌘C/⌘V landed in the webview (§4.3 verification).[4]
 
 ### Porting to v2 later (for planning only)
 The documented v1→v2 change is narrow: default main runtime Bun → Cottontail
