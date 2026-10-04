@@ -11,6 +11,10 @@ House style: `CODE_STYLE.md` — carried over from the v1 repo and reconciled wi
   ride along with the phase they serve.
 - An agent claims a phase, does the tasks, and must reproduce the **Verification** lines before
   marking it done. "Landed" without a reproduced observation is not done.
+- A run that shows no change is **not** evidence your change had no effect. Before concluding
+  anything, confirm the app actually launched and is alive, that the built bundle is newer than the
+  source you edited (`Resources/app/bun/index.js` vs `src/bun/index.ts`), and that your change is
+  present in it (`grep` for it). A launch that died and a stale bundle look exactly like a no-op edit.
 - Phases are sequential unless a phase says otherwise. Dependencies are stated explicitly — the v1
   roadmap died mid-file at Phase 7 with 6 phases unchecked, so nothing here is left implied.
 
