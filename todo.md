@@ -82,32 +82,57 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 ## Phase 2 — Two-sided RPC bridge, window wiring, main-process skeleton
 
 *Deps: 1. Retires the riskiest unknown: the bridge itself. No real note I/O yet.*
+*Status: implemented and reproduced, **except** the Edit-accelerator line — see Verification.*
 
-- [ ] `src/shared/types.ts` with the full `NotesRPC` schema from SPEC §7 (both halves, `RPCSchema`
+- [x] `src/shared/types.ts` with the full `NotesRPC` schema from SPEC §7 (both halves, `RPCSchema`
       type-only import from `electrobun/bun`). Each half names the side that **handles** it, `messages`
-      included — a bun → view push belongs in the `webview` half (SPEC §15.21).
-- [ ] `src/bun/index.ts`: `BrowserView.defineRPC<NotesRPC>()`, `await mkdir(NOTEBOOK_DIR, {recursive})`
+      included — a bun → view push belongs in the `webview` half (SPEC §15.21). Two entries were added
+      on top of §7's list because Phase 2 needs to exercise both message directions and to read the DOM
+      back; both are now written into SPEC §7.
+- [x] `src/bun/index.ts`: `BrowserView.defineRPC<NotesRPC>()`, `await mkdir(NOTEBOOK_DIR, {recursive})`
       under `Utils.paths.userData`, pass the RPC object via the window's `rpc` option.
-- [ ] `ApplicationMenu.setApplicationMenu([...])` with the App + Edit roles (undo/redo/cut/copy/
+- [~] `ApplicationMenu.setApplicationMenu([...])` with the App + Edit roles (undo/redo/cut/copy/
       paste/selectAll) — without these the webview gets **no** edit accelerators. Role strings are
       unvalidated by types and dropped silently at runtime if wrong (SPEC §15.23), so the ⌘C/⌘V/⌘Z
-      verification line below is the real test.
-- [ ] Call into the view from bun at least once each way — `win.webview.rpc.send.<name>({...})`
+      verification line below is the real test — and it is the one line still outstanding.
+- [x] Call into the view from bun at least once each way — `win.webview.rpc.send.<name>({...})`
       (fire-and-forget) and one view-served request — so the bun → view direction is proven, not assumed
       (SPEC §5, §15.22). This is the one direction the schema does not exercise by itself.
-- [ ] `src/mainview/rpc.ts`: `Electroview.defineRPC<NotesRPC>()`, export the client
-      (`electroview.rpc.request`) and the instance.
-- [ ] `src/mainview/services/notes.service.ts` with one **stub** method (e.g. `getFolders` returning a
-      literal root node) to prove the round trip end to end.
-- [ ] Shell renders the stub's response.
+- [x] `src/mainview/rpc.ts`: `Electroview.defineRPC<NotesRPC>()`, export the client
+      (`electroview.rpc.request`; taken from the local binding — `Electroview.rpc` is optional and
+      would need an assertion) and the instance, plus a subscription for the incoming push.
+- [x] `src/mainview/services/notes.service.ts` with one **stub** path to prove the round trip end to
+      end. Read literally ("the stub returns a literal root node"), a literal *inside* the service would
+      prove nothing about the bridge: the literal lives in the bun handler and the service is the thin
+      wrapper over it (CODE_STYLE §9.2), which is what makes the call a real round trip.
+- [x] Shell renders the stub's response.
 
-**Verification**
-- The stub call returns a value across the bridge and it is rendered in the window (RPC request path).
-- A fire-and-forget message works both ways (bun → view and view → bun). The two directions land in
-  different schema halves, so confirm each separately rather than assuming symmetry.
-- `utils.paths.userData/notebook/` exists on disk after launch; relaunching does not error.
-- ⌘C / ⌘V / ⌘Z work inside the window (proves the Edit menu roles are wired).
-- `bunx tsc --noEmit` exits 0 — the shared schema compiles from both halves.
+**Verification** — reproduced 2026-10-04 against `electrobun@1.18.1` + bun 1.3.14, macOS arm64
+- The stub call returns a value across the bridge and it is rendered in the window: the main process
+  read the view's own DOM back over the view-served request and logged
+  `[bun] view DOM proof OK — … getFolders returned "Notebook" — 2 folder(s) below it.IdeasIdeas/2026
+  phase-2-stub.md · 11:30:00 AM …`. The grandchild path is in there, so the recursive `FolderNode`
+  shape crossed the bridge rather than a flat placeholder.
+- Fire-and-forget works in both directions, confirmed separately (different schema halves):
+  **view → bun** by the `viewReady` handshake — `[bun] view ready — views://mainview/index.html` is
+  printed only by that message's handler; **bun → view** by `send.noteChanged(...)`, whose id the same
+  DOM read finds rendered. `logToWebview` (the other declared bun → view message) is sent on the same
+  path.
+- `~/Library/Application Support/com.example.notes/dev/notebook/` exists on disk after launch
+  (`Utils.paths.userData` = appData/identifier/channel), and relaunching does not error — runs 2 and 3
+  both came up with the directory already present.
+- ⌘C / ⌘V / ⌘Z inside the window — **not reproduced.** Sending a keystroke needs an OS permission this
+  harness does not have: `osascript`'s System Events call blocks on the macOS Automation prompt and
+  never returns, `screencapture -x` fails with `could not create image from display`, and cua-driver
+  reports `permissions_pending` (Accessibility/Screen Recording). The role strings themselves were
+  re-checked against the package (`roleLabelMap` carries all six — see lessons.md, which also corrects
+  the Phase 1 claim that no role literals exist there). To close the line: allow the pending Automation
+  prompt (or grant Accessibility) and re-run, or check by hand in the running window — a temporary
+  `#edit-probe` textarea is in the shell for exactly this, since Phase 2 has no editable element yet.
+- `bun run type-check`: `type-check OK — 0 project errors (6 known electrobun-internal error(s)
+  quarantined)`.
+- Freshness checked per the standing rule on every run: the launcher was alive, `Resources/app/bun/
+  index.js` was newer than `src/bun/index.ts`, and each edit was greppable in the built bundle.
 
 ## Phase 3 — Notes store on disk (all nine SPEC §7 methods)
 

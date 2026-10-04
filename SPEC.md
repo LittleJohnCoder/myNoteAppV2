@@ -1,7 +1,8 @@
 # SPEC — Obsidian-like Note-Taking App (Electrobun v1)
 
-Status: draft — §15.14–20 verified against the installed `electrobun@1.18.1` (Phase 1);
-the rest is still documentation-derived.
+Status: draft — §15.14–23 verified against the installed `electrobun@1.18.1`
+(§15.14–20 in Phase 1 by reading the package; §15.21–23 exercised by Phase 2's live
+bridge run); the rest is still documentation-derived.
 Target framework: **Electrobun v1** (pinned `1.18.1`)
 Supersedes: `../myNotesApp/SPEC.md`
 Scope: product behaviour **plus** the exact Electrobun v1 integration contract
@@ -340,11 +341,24 @@ export type NotesRPC = {
       moveNote:      { params: { id: string; targetFolder: string }; response: { ok: boolean; newId: string } };
     };
     messages: {
-      // Messages the bun side RECEIVES — i.e. sent by the view. None yet.
+      // Messages the bun side RECEIVES — i.e. sent by the view.
+      //
+      // Phase 2 addition (this line is not in the original §7 draft, which said "none yet"): the
+      // view announces itself once it is mounted and listening, and bun pushes nothing until it
+      // hears this. bun → view sends are fire-and-forget with no queue, so a push that races the
+      // view's socket is silently dropped (measured, Phase 2 — see lessons.md).
+      viewReady: { url: string };
     };
   }>;
   webview: RPCSchema<{
-    requests: {};   // requests the view serves, if any
+    requests: {
+      // Served by the view itself. Phase 2 addition: `Electroview.defineRPC` merges this built-in
+      // in (it runs the script through `new Function` and returns its value), but the built-in is
+      // not merged into the bun-side types — declaring it here is what makes it callable from bun
+      // with types (§15.22). The app's "read the live DOM from bun" channel: a script body with an
+      // explicit `return`, e.g. `return document.querySelector("main.shell")?.textContent ?? ""`.
+      evaluateJavascriptWithResponse: { params: { script: string }; response: unknown };
+    };
     messages: {
       // Messages the view RECEIVES — i.e. sent by bun. See §5 for the send call.
       logToWebview: { level: "info" | "error"; msg: string };
@@ -361,6 +375,13 @@ Rules that are easy to get wrong:
 - The schema is **two-sided** (`bun` and `webview`, each with `requests` +
   `messages`). Define both even when one side is empty.[5]
 - Handlers are **async**; return values are the `response` type.
+- A handler object may cover only the methods that exist so far: `handlers.requests` keys are
+  optional (`RPCRequestHandlerObject`), so a complete schema plus one implemented method compiles,
+  and calling an unimplemented one rejects at runtime with
+  `The requested method has no handler: <name>`. Phase 2 ships exactly that shape.
+- bun → view sends are **not queued**: a `send` issued before the view's socket is open is dropped
+  with no error, which is why the schema above carries the `viewReady` handshake rather than pushing
+  straight after `new BrowserWindow(...)`.
 
 Type-safety fallback: the v1 notes-app defines the view-side type without
 `RPCSchema` to avoid pulling bun code into the view bundle[12]; the `RPCSchema`
