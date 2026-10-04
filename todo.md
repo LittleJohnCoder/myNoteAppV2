@@ -84,11 +84,17 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 *Deps: 1. Retires the riskiest unknown: the bridge itself. No real note I/O yet.*
 
 - [ ] `src/shared/types.ts` with the full `NotesRPC` schema from SPEC §7 (both halves, `RPCSchema`
-      type-only import from `electrobun/bun`).
+      type-only import from `electrobun/bun`). Each half names the side that **handles** it, `messages`
+      included — a bun → view push belongs in the `webview` half (SPEC §15.21).
 - [ ] `src/bun/index.ts`: `BrowserView.defineRPC<NotesRPC>()`, `await mkdir(NOTEBOOK_DIR, {recursive})`
       under `Utils.paths.userData`, pass the RPC object via the window's `rpc` option.
 - [ ] `ApplicationMenu.setApplicationMenu([...])` with the App + Edit roles (undo/redo/cut/copy/
-      paste/selectAll) — without these the webview gets **no** edit accelerators.
+      paste/selectAll) — without these the webview gets **no** edit accelerators. Role strings are
+      unvalidated by types and dropped silently at runtime if wrong (SPEC §15.23), so the ⌘C/⌘V/⌘Z
+      verification line below is the real test.
+- [ ] Call into the view from bun at least once each way — `win.webview.rpc.send.<name>({...})`
+      (fire-and-forget) and one view-served request — so the bun → view direction is proven, not assumed
+      (SPEC §5, §15.22). This is the one direction the schema does not exercise by itself.
 - [ ] `src/mainview/rpc.ts`: `Electroview.defineRPC<NotesRPC>()`, export the client
       (`electroview.rpc.request`) and the instance.
 - [ ] `src/mainview/services/notes.service.ts` with one **stub** method (e.g. `getFolders` returning a
@@ -97,7 +103,8 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 
 **Verification**
 - The stub call returns a value across the bridge and it is rendered in the window (RPC request path).
-- A fire-and-forget message works both ways (bun → view and view → bun).
+- A fire-and-forget message works both ways (bun → view and view → bun). The two directions land in
+  different schema halves, so confirm each separately rather than assuming symmetry.
 - `utils.paths.userData/notebook/` exists on disk after launch; relaunching does not error.
 - ⌘C / ⌘V / ⌘Z work inside the window (proves the Edit menu roles are wired).
 - `bunx tsc --noEmit` exits 0 — the shared schema compiles from both halves.

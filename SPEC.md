@@ -254,7 +254,10 @@ const win = new BrowserWindow({
 `BrowserWindow` accepts `title`, `url`, `frame {width,height,x,y}`, `titleBarStyle`
 (`default` | `hidden` | `hiddenInset`), `transparent`, `sandbox` and more.[4]
 Pass the RPC object through the window's `rpc` option so the webview half is
-connected.[4][11]
+connected.[4][11] The same object is reachable as `win.webview.rpc`, which is how the
+bun side calls *into* the view: `win.webview.rpc.send.noteChanged({ id, updatedAt })`
+for fire-and-forget, `win.webview.rpc.request.<name>({ ...params })` for
+request/response. The view is the half that must declare a matching handler (§7).
 
 ---
 
@@ -337,13 +340,15 @@ export type NotesRPC = {
       moveNote:      { params: { id: string; targetFolder: string }; response: { ok: boolean; newId: string } };
     };
     messages: {
-      noteChanged: { id: string; updatedAt: number };  // bun → view push
+      // Messages the bun side RECEIVES — i.e. sent by the view. None yet.
     };
   }>;
   webview: RPCSchema<{
-    requests: {};   // view-side requests, if any
+    requests: {};   // requests the view serves, if any
     messages: {
-      logToWebview: { level: "info" | "error"; msg: string };  // bun → view
+      // Messages the view RECEIVES — i.e. sent by bun. See §5 for the send call.
+      logToWebview: { level: "info" | "error"; msg: string };
+      noteChanged: { id: string; updatedAt: number };        // bun → view push
     };
   }>;
 };
@@ -566,6 +571,20 @@ Checked against `node_modules/electrobun@1.18.1` and a real `bun start` run — 
     "runtime":{"exitOnLastWindowClosed":true},"bunVersion":"1.3.13"}` — with
     `bundleCEF: false` the renderer is the OS webview (WKWebView), and the packaged
     bun comes from the core tarball, not from the dev machine's bun.
+
+21. **A schema half names the side that handles it — `messages` included.** `Schema["bun"]["messages"]`
+    is what bun *receives*; a bun → view push must be declared in the **`webview`** half. Verified from
+    `ElectrobunRPCConfig`/`defineElectrobunRPC`, where `handlers.requests` and `handlers.messages` are both
+    typed from `Schema[Side]`. A mis-send is caught (the send proxy is typed from the other half), but a
+    handler for a message nobody sends is silently dead.[5]
+22. **The view has built-in requests bun can call.** `Electroview.defineRPC` merges extra handlers, among
+    them `evaluateJavascriptWithResponse: { params: { script: string }; response: any }`, which runs the
+    script in the view and returns its value. Bun reaches it via `win.webview.rpc.request.
+    evaluateJavascriptWithResponse({ script })` — only if the schema declares it, since the built-in is not
+    merged into the bun-side types. Plain `executeJavascript(js)` stays fire-and-forget.[6][11]
+23. **Menu `role` strings are unvalidated.** `ApplicationMenuItemConfig.role` is typed `string`, and no role
+    literal appears anywhere in the package, so a wrong role type-checks fine and is dropped at runtime on
+    the native side. `⌘C`/`⌘V`/`⌘Z` inside the window is the only real test (§4.3 verification).[4]
 
 ### Porting to v2 later (for planning only)
 The documented v1→v2 change is narrow: default main runtime Bun → Cottontail
