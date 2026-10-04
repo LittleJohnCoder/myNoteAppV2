@@ -143,47 +143,71 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 *Deps: 2. The bulk backend phase; async I/O only. The semantics are **decided**, not open — implement
 SPEC §9.1 as written, including the file split from §3.*
 
-*Status: the layer and its four test files **exist** in the working tree but are **unverified** — no test
-run has been recorded, and `src/bun/index.ts` still answers `getFolders` with the Phase 2 stub. Read the
-tasks below as "make these true", not "create these files": the first real job is to wire the ten handlers
-and reproduce the numbered checks under Verification. **Do not rewrite the layer** unless one of those
-checks fails — it already encodes every §9.1 ruling (slug charset, collision scheme, title precedence, the
-dot-skip, the error strings), and a rewrite silently re-decides them.*
+*Status: **done and reproduced 2026-10-04** — all nine tasks and all eighteen numbered checks. The layer and
+its four test files pre-existed the phase unverified; this phase **checked** rather than rewrote them (the
+tests pass and every check below reproduces), and the real work was wiring the ten handlers and building the
+smoke. `src/bun/index.ts` no longer answers `getFolders` with the Phase 2 stub. The layer's §9.1 rulings
+(slug charset, collision scheme, title precedence, the dot-skip, the error strings) are untouched.*
 
-- [ ] `src/bun/notes/` filesystem layer, one concern per file (SPEC §3) — **already on disk**, so this task
-      is to *check* it rather than write it: `paths.ts` (id ↔ path mapping + containment checks), `meta.ts`
-      (pure derivations — title, preview, slug), `tree.ts` (walk → `FolderNode`, plus `listAllNotes`),
-      `read.ts` (`readNote` — open a note and derive its meta), `write.ts` (create/save/delete/move +
-      folder create/delete/rename), with `index.ts` as the barrel `src/bun/index.ts` imports.
-- [ ] Handlers for all ten methods: `getAllNotes` (meta + 60-char preview, no bodies, `updatedAt`
+- [x] `src/bun/notes/` filesystem layer, one concern per file (SPEC §3) — **was already on disk**, so this
+      task was to *check* it rather than write it: `paths.ts` (id ↔ path mapping + containment checks),
+      `meta.ts` (pure derivations — title, preview, slug), `tree.ts` (walk → `FolderNode`, plus
+      `listAllNotes`), `read.ts` (`readNote` — open a note and derive its meta), `write.ts`
+      (create/save/delete/move + folder create/delete/rename), with `index.ts` as the barrel
+      `src/bun/index.ts` imports. Checked and left unrewritten, per the Status note: all four test files
+      pass and every numbered check reproduces.
+- [x] Handlers for all ten methods: `getAllNotes` (meta + 60-char preview, no bodies, `updatedAt`
       desc), `getFolders` (recursive `FolderNode`, root `{ path: "", name: "Notebook" }`), `openNote`
       (body on demand, `null` when absent), `saveNote`, `createNote` (slugged filename, collision
       suffix, returns the new `note`), `deleteNote`, `createFolder`, `deleteFolder` (fails with
       `folder not empty`), `moveNote` (returns `newId`), `renameFolder` (returns `changedIds` — the
       Phase 4 context menu needs it).
-- [ ] Define all ten as **one named object** (`notesHandlers`) passed to
+- [x] Define all ten as **one named object** (`notesHandlers`) passed to
       `BrowserView.defineRPC({ handlers: { requests: notesHandlers } })`, **not** an inline literal. The
       object handed *in* is the only handle on the handlers — what `defineRPC` returns exposes
       `setTransport`/`request`/`send`/… but no read-back of the handler map (measured) — and it is what
       lets the smoke drive the wiring without a round trip. Type it from the schema so a missing, extra or
       misnamed method is a compile error. Refines SPEC §5's sample; the handler bodies are unchanged.
-- [ ] Every mutation returns the §7 envelope with the §9.1 error strings (`not found`, `invalid id`,
+- [x] Every mutation returns the §7 envelope with the §9.1 error strings (`not found`, `invalid id`,
       `invalid name`, `already exists`, `folder not empty`) — never a thrown exception for an expected
       failure.
-- [ ] All handlers `async` with `node:fs/promises` — no sync I/O (SPEC §9, §15.6). Writes are
+- [x] All handlers `async` with `node:fs/promises` — no sync I/O (SPEC §9, §15.6). Writes are
       temp-file-then-`rename` (SPEC §9.1).
-- [ ] Path safety: ids, names and paths that escape `NOTEBOOK_DIR` are **rejected, not normalised**
+- [x] Path safety: ids, names and paths that escape `NOTEBOOK_DIR` are **rejected, not normalised**
       (SPEC §9.1).
-- [ ] `bun test` wired up — add the `test` script to `package.json` (§4.3, §9.2), with `paths.test.ts`,
+- [x] `bun test` wired up — add the `test` script to `package.json` (§4.3, §9.2), with `paths.test.ts`,
       `meta.test.ts`, `tree.test.ts` and `write.test.ts` beside their subjects.
-- [ ] Dev-only boot smoke in `src/bun/index.ts` (`channel === "dev"` only): run the **numbered checks under
-      Verification** against the real `NOTEBOOK_DIR`, in order (1–13 call the notes-layer barrel; 14–17
-      call the `notesHandlers` object the window dispatches through), printing exactly one
+- [x] Dev-only boot smoke (`channel === "dev"` only): run the **numbered checks under Verification**
+      against the real `NOTEBOOK_DIR`, in order (1–13 call the notes-layer barrel; 14–17 call the
+      `notesHandlers` object the window dispatches through), printing exactly one
       `[smoke] N ok — <what was observed>` or `[smoke] N FAIL — expected <x>, saw <y>` line per check, and
-      removing everything it created in a `finally` so a failed check leaves no litter. Temporary — it goes
-      once Phase 4 exercises the methods for real (see the closing line under Verification).
+      removing everything it created in a `finally` so a failed check leaves no litter.
+      **Deviation from this task's original wording:** the smoke lives in `src/bun/smoke.ts`
+      (`runPhase3Smoke`), invoked from `src/bun/index.ts`, rather than inline — 300+ lines of checks do not
+      belong in the wiring module (CODE_STYLE §3, §12.1). Temporary; it goes once Phase 4 exercises the
+      methods for real (see the closing line under Verification).
 
-**Verification**
+**Verification** — reproduced 2026-10-04 against `electrobun@1.18.1` + bun 1.3.14, macOS arm64
+
+- The boot smoke printed exactly one line per check; all seventeen `ok`, ending
+  `[smoke] done — 0 failure(s); notebook cleared`. Verbatim, checks 2 (the corrected one), 6 (the
+  corrected one), 15 and 17:
+
+  ```
+  [smoke] 2 ok — untitled.md:untitled untitled1.md:untitled mynote.md:mynote
+  [smoke] 6 ok — ["-root.md","Archive/Old.md","Ideas/2026/other.md","Ideas/2026/plan.md","mynote.md","untitled.md","untitled1.md"] plan.title="plan"
+  [smoke] 15 ok — create=handlerprobe.md openNote.content=string save=1791141787371 listHasBody=false folder=HandlerFolder moved=HandlerFolder/handlerprobe.md changedIds=[{"from":"HandlerFolder/handlerprobe.md","to":"HandlerFolderRenamed/handlerprobe.md"}] root=Notebook deleted=true/true
+  [smoke] 17 ok — ok=true path=casedir changedIds=[{"from":"CaseDir/n.md","to":"casedir/n.md"}] opened="body"
+  ```
+
+- Check 18: `bun run test` → `44 pass, 0 fail, 133 expect() calls` across the four `src/bun/notes/*.test.ts`.
+- `bun run type-check` → `type-check OK — 0 project errors (6 known electrobun-internal error(s) quarantined)`.
+- Freshness, per the standing rule: the launcher was alive; `Resources/app/bun/index.js` was newer than
+  `src/bun/index.ts`; `runPhase3Smoke` and `notesHandlers` are greppable in the built bundle, and
+  `STUB_FOLDER_TREE` is gone from it.
+- The notebook was **empty** after the run (`~/Library/Application Support/com.example.notes/dev/notebook/`,
+  0 entries) — the smoke's `finally` removed everything it created.
+- Phase 2's bridge proof still passes: `[bun] view DOM proof OK — the bun → view push rendered: …`.
 
 The smoke prints exactly one line per numbered check, in the fixed form `[smoke] N ok — <what was
 observed>` or `[smoke] N FAIL — expected <x>, saw <y>`, and runs them in this order (later checks build on
@@ -195,8 +219,9 @@ was not reproducible.
 1. `createNote(NOTEBOOK_DIR, "", "My Note")` → `{ ok: true }`, the returned `note.id` is `mynote.md`, that
    file exists and is 0 bytes, `note.title` is `mynote`, `note.preview` is `""`.
 2. Two more `createNote(NOTEBOOK_DIR, "", "")` calls → ids `untitled.md` then `untitled1.md` (the lowest
-   free number, added after slugging), and `getAllNotes` lists **all three** as `untitled` — their stems
-   match the no-title pattern and an empty body has no H1 to fall back to.
+   free number, added after slugging), and `getAllNotes` titles **both of those** `untitled` — their stems
+   match the no-title pattern and an empty body has no H1 to fall back to. `mynote.md` from check 1 keeps
+   its name: only an untitled note reaches the body.
 3. `writeNote(NOTEBOOK_DIR, "untitled.md", "# Hello, World!\n\nbody")` → that row now titles
    `Hello, World!` with a preview starting `# Hello, World!`, and its `id` is **still** `untitled.md`. A
    filename comes only from `createNote`'s `title` argument; only an untitled note uses the H1 fallback.
@@ -207,8 +232,8 @@ was not reproducible.
    `{ path: "", name: "Notebook" }` containing `Ideas` (with child `2026`) and `Archive` — no dot-file, no
    dot-directory, and `Ideas` is still walked even though `notes.txt` is not a note.
 6. With that tree present, the ids from `getAllNotes` are exactly `-root.md`, `Archive/Old.md`,
-   `Ideas/2026/other.md`, `Ideas/2026/plan.md`, `mynote.md`, `untitled.md` (checks 1–3 are still on disk),
-   and `plan`'s title is `plan`. The name beats the H1.
+   `Ideas/2026/other.md`, `Ideas/2026/plan.md`, `mynote.md`, `untitled.md`, `untitled1.md` (checks 1–3 are
+   still on disk — both untitled notes survive), and `plan`'s title is `plan`. The name beats the H1.
 7. `readNote(NOTEBOOK_DIR, "Ideas/2026/plan.md")` returns the body; `readNote` on a missing id returns
    `null`, not an error.
 8. `createFolder(NOTEBOOK_DIR, "Ideas", "Drafts")` → `ok`; the identical call again → `already exists`.

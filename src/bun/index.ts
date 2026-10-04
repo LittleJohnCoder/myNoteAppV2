@@ -2,8 +2,21 @@ import { ApplicationMenu, BrowserView, BrowserWindow, Updater, Utils } from "ele
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { FolderNode, NotesRPC } from "../shared/types";
+import type { NotesRPC } from "../shared/types";
 import { waitForDomText, type EvaluateScript } from "./domProbe";
+import {
+  createFolder,
+  createNote,
+  deleteFolder,
+  deleteNote,
+  listAllNotes,
+  moveNote,
+  readFolderTree,
+  readNote,
+  renameFolder,
+  writeNote,
+} from "./notes";
+import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
 const DEV_SERVER_URL = "http://localhost:5173";
@@ -66,30 +79,37 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 /**
- * Phase 2 stub — the real notebook walk arrives with the filesystem layer in Phase 3. It exists
- * so the request path (view → bun → typed response → rendered in the window) is proven before
- * any note I/O exists, and it nests one level so the recursive `FolderNode` shape crosses the
- * bridge rather than a flat placeholder.
+ * The ten handlers are one **named object**, not an inline literal (SPEC §5). It is the only
+ * handle on them — what `defineRPC` returns exposes `setTransport`/`request`/`send`/… but no
+ * read-back of the handler map — so the Phase 3 smoke drives this object directly, with no
+ * round trip. Typed from the schema, so a missing, extra or misnamed method is a compile error.
  */
-const STUB_FOLDER_TREE: FolderNode = {
-  path: "",
-  name: "Notebook",
-  children: [
-    {
-      path: "Ideas",
-      name: "Ideas",
-      children: [{ path: "Ideas/2026", name: "2026", children: [] }],
-    },
-  ],
+type NotesRequests = NotesRPC["bun"]["requests"];
+export type NotesHandlers = {
+  [M in keyof NotesRequests]: (
+    params: NotesRequests[M]["params"],
+  ) => Promise<NotesRequests[M]["response"]>;
+};
+
+const notesHandlers: NotesHandlers = {
+  // Handlers stay one-liners: the notes layer returns the §7 envelopes itself (§9.1), so there
+  // is no error plumbing to duplicate here.
+  getAllNotes: async () => listAllNotes(NOTEBOOK_DIR),
+  getFolders: async () => readFolderTree(NOTEBOOK_DIR),
+  openNote: async ({ id }) => readNote(NOTEBOOK_DIR, id),
+  saveNote: async ({ id, content }) => writeNote(NOTEBOOK_DIR, id, content),
+  createNote: async ({ folder, title }) => createNote(NOTEBOOK_DIR, folder, title),
+  deleteNote: async ({ id }) => deleteNote(NOTEBOOK_DIR, id),
+  createFolder: async ({ parent, name }) => createFolder(NOTEBOOK_DIR, parent, name),
+  deleteFolder: async ({ path }) => deleteFolder(NOTEBOOK_DIR, path),
+  moveNote: async ({ id, targetFolder }) => moveNote(NOTEBOOK_DIR, id, targetFolder),
+  renameFolder: async ({ path, name }) => renameFolder(NOTEBOOK_DIR, path, name),
 };
 
 const notesRPC = BrowserView.defineRPC<NotesRPC>({
   maxRequestTime: 10_000,
   handlers: {
-    requests: {
-      getFolders: async () => STUB_FOLDER_TREE,
-      // The other eight request handlers land with their filesystem work in Phase 3.
-    },
+    requests: notesHandlers,
     messages: {
       // The view telling us it is up. Everything bun pushes waits for this.
       viewReady: (payload) => {
@@ -116,11 +136,20 @@ mainWindow.webview.on("dom-ready", () => {
   console.log(`[bun] webview dom-ready — ${viewUrl} loaded`);
 });
 
+/**
+ * Phase 3 boot smoke (todo.md): dev only, and temporary — it goes once Phase 4 exercises the
+ * methods for real. It drives the notes-layer barrel (checks 1–13) and this file's handler map
+ * (checks 14–17) against the real `NOTEBOOK_DIR`, so the wiring is proven, not assumed.
+ */
+if (channel === "dev") {
+  void runPhase3Smoke({ dir: NOTEBOOK_DIR, handlers: notesHandlers });
+}
+
 let hasHandshaked = false;
 
 /**
  * Runs once per launch, after the view reports itself ready. This is the half of the bridge a
- * round trip cannot exercise on its own (SPEC §15.21/: the two message directions live in
+ * round trip cannot exercise on its own (SPEC §15.21: the two message directions live in
  * different schema halves), so each direction is proven separately here:
  *
  *   1. view → bun  — this function only runs because `viewReady` arrived.
@@ -159,7 +188,7 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
   const { matched, text } = await waitForDomText(
     evaluate,
     {
-      // Read the whole shell, not just the push line: one probe then covers both the stub
+      // Read the whole shell, not just the push line: one probe then covers both the tree
       // response (getFolders) and the push, because both are rendered in this text.
       script: 'return document.querySelector("main.shell")?.textContent ?? ""',
       needle: PUSH_PROBE_ID,
