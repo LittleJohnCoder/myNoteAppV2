@@ -86,8 +86,9 @@ myNoteAppV2/
 │   │   └── notes/              # filesystem layer — one concern per file (§9.1)
 │   │       ├── index.ts        # barrel exporting the functions §5 imports
 │   │       ├── paths.ts        # id ↔ path mapping + containment checks
-│   │       ├── tree.ts         # tree walk → FolderNode + note metas
-│   │       ├── read.ts         # open a note; derive meta (title, preview, mtime)
+│   │       ├── meta.ts         # pure derivations (title, preview, slug) — shared by walk/read/write
+│   │       ├── tree.ts         # walk → FolderNode, and listAllNotes (reads every note's meta)
+│   │       ├── read.ts         # readNote — open one note and derive its meta
 │   │       └── write.ts        # create/save/delete/move + folder create/delete/rename
 │   ├── shared/
 │   │   └── types.ts            # RPC schema + DTOs, imported by BOTH halves
@@ -96,10 +97,10 @@ myNoteAppV2/
 │       ├── main.tsx            # React entry (createRoot)
 │       ├── rpc.ts              # Electroview.defineRPC + exported client
 │       ├── App.tsx
-│       ├── components/         # sidebar shell: FolderTree, NotesPanel, Toolbar, StatusBar
+│       ├── components/         # shell: FolderTree, NotesPanel, Toolbar, StatusBar, TitleInput (§10.1)
 │       ├── hooks/              # controllers: use<X>Controller()
 │       ├── services/           # thin wrappers over the RPC client (CODE_STYLE §9.2)
-│       ├── store/              # Zustand: selectedFolder, selectedNote, theme (§10.5)
+│       ├── store/              # Zustand: selectedFolder, selectedNote, draftNote, theme (§10.5)
 │       ├── utils/              # pure helpers (folder-tree flatten, …)
 │       ├── editor/             # CodeMirror + hybrid plugin wiring
 │       └── styles.css          # plain CSS (no Tailwind)
@@ -205,8 +206,8 @@ export default defineConfig({
 | `electrobun run` | run a built app |
 
 `start` and the two build scripts go through `build:renderer` rather than calling `vite build`
-directly, so the renderer can be rebuilt on its own. `test` arrives with the notes layer (Phase 3,
-§9.2) and holds no cases until then.
+directly, so the renderer can be rebuilt on its own. `test` belongs to the notes layer (Phase 3,
+§9.2), and the cases that justify it live beside it.
 
 Watch mode watches `build.bun.entrypoint`'s directory, each view entrypoint's
 directory, `build.copy` inputs and `build.watch`; `build.watchIgnore` excludes
@@ -351,7 +352,7 @@ import type { RPCSchema } from "electrobun/bun";
 
 export type NoteMeta = {
   id: string;          // notebook-relative path id incl. ".md", e.g. "work/ideas.md" (§9.1)
-  title: string;       // first ATX H1, else the filename stem (§9.1)
+  title: string;       // the note's name — its filename stem; first H1 only as the fallback (§9.1)
   folder: string;      // relative folder path, "" for root
   updatedAt: number;   // epoch ms, from the file mtime — also the sort key (§9.1)
   preview: string;     // first 60 chars of body, whitespace runs collapsed (§9.1)
@@ -440,6 +441,10 @@ Rules that are easy to get wrong:
   unimplemented method — not a missing file.
 - **Ids change.** An id is a path, so `moveNote` and `renameFolder` invalidate it: the caller re-keys
   its state from `newId` / `changedIds` rather than assuming the old id still resolves (§12).
+- **`createNote` is called when the title is committed, not when `+` is pressed.** `+` opens an unsaved
+  draft (§10.5); the note materialises on the first commit — the title committed with Enter/Tab/blur, or
+  the first body save with the title left empty. There is deliberately **no draft method** in this schema:
+  a draft has no id, so it is renderer state, and the ten methods above stay ten.
 
 Type-safety fallback: the v1 notes-app defines the view-side type without
 `RPCSchema` to avoid pulling bun code into the view bundle[12]; the `RPCSchema`
@@ -483,18 +488,19 @@ form above is the documented approach and works because it is type-only.[5]
 ### 9.1 Notes-layer semantics (Phase 3 decisions)
 
 Each of these was open in the Phase 3 draft and is now a decision. Implement them as written — the
-Phase 3 verification lines cannot be judged without them.
+numbered checks under Phase 3's Verification in `todo.md` cannot be judged without them.
 
 - **`id`.** Notebook-relative, `/`-separated, and **includes the `.md` extension**
   (`"Ideas/2026/plan.md"`). The notebook root is `path: ""` / `folder: ""`.
-- **Title.** The first ATX H1 (`# …`) in the body, trimmed; if there is none, or the body is empty, the
-  filename stem. A note's `title` may therefore differ from its filename — which is correct, because
-  nothing in the MVP renames a file: the toolbar is formatting-only and there is no rename action.
-- **Filenames from `createNote`.** `title` is slugified — lowercase, spaces → `-`, every character
-  outside `[a-z0-9-_.]` dropped (including `/` and `\`, so a title cannot escape the notebook). An empty
-  result becomes `untitled`. A collision appends ` 2`, ` 3`, … before the extension
-  (`plan.md` → `plan 2.md`). The response returns the resulting `note`, so the renderer never guesses
-  an id.
+- **Title.** The note's **name** — its filename stem, exactly as stored, so lowercase and space-free —
+  wins. The first ATX H1 (`# …`) in the body is the **auxiliary** fallback, used only when the title was
+  skipped at creation; a body with no H1 either ⇒ `untitled`. Nothing in the MVP renames a file (the
+  toolbar is formatting-only and there is no rename action), so a note created as `plan.md` is titled
+  `plan` whatever its body says, and only an untitled note takes its title from its body. Making the title
+  editable later *is* that rename — deferred, §14.
+- **"No title given" is decided by the filename**, because that is all the layer can see: a stem matching
+  `/^untitled\d*$/` means the title was skipped, which is what sends the note to the H1 fallback. Accepted
+  consequence: a note someone deliberately names `untitled` takes the fallback path too.
 - **Failure shape.** Mutations return `ok: false` with a short `error` string instead of throwing:
   `not found`, `invalid id`, `invalid name`, `already exists`, `folder not empty`. Reads
   (`getAllNotes`, `getFolders`, `openNote`) return data and use `null` for absence; only genuine bugs
@@ -506,9 +512,6 @@ Phase 3 verification lines cannot be judged without them.
   (`invalid name`).
 - **Timestamps.** `updatedAt` is the file's mtime in epoch ms, read at list/open time — not a stored
   field. It is both the sort key and the "modified date" in the list, so one source keeps them agreeing.
-- **Preview.** The body's first 60 characters after collapsing every whitespace run (newlines included)
-  to a single space and trimming, with Markdown punctuation left in place. `openNote` is the only call
-  that returns the body.
 - **Tree walk.** Notes are `*.md` files (extension compared case-insensitively). Dot-**files** and
   dot-**directories** are skipped at any depth; other extensions are ignored as notes, but their
   directories are still walked so nesting is not lost.
@@ -520,22 +523,89 @@ Phase 3 verification lines cannot be judged without them.
 - **Atomic writes.** Write to a sibling temp file in the same directory, then `rename()` — so quitting
   during the 500 ms save debounce can never leave a half-written note.
 - **When `noteChanged` fires.** After every successful `saveNote`/`createNote`, with that note's id and
-  `updatedAt`. Nothing sends it today (Phase 2 declared the message; §7 records the trigger).
+  `updatedAt`. Nothing sends it today (Phase 2 declared the message; §7 records the trigger; Phase 3's
+  handlers stay one-liners over the notes layer and do not push).
+- **One notebook, one tree.** Every note is one `.md` file and every folder is an ordinary nested
+  directory — all under `NOTEBOOK_DIR`, and nothing may resolve outside it. There is no second storage
+  root, no sidecar index, no JSON. `createFolder` nests through `parent` to arbitrary depth inside that
+  same dir.
+- **`createNote` target folder.** `folder` must name an existing directory under the notebook (`""` is
+  the root). A missing one returns `{ ok: false, error: "not found" }` — `createNote` never creates
+  folders; `createFolder` does.
+- **`createNote` writes an empty file** (0 bytes). Its `title` is therefore the filename stem and its
+  `preview` is `""`; the returned `note` is derived from the written file exactly as `getAllNotes` derives
+  it. §10.5's `+` passes the committed title, or `""` when the user skips straight to the body — so the
+  empty note is *named* untitled (`untitled.md`, then `untitled1.md`, `untitled2.md`, …) rather than given
+  a body, and all of those are titled `untitled` (§9.1's no-title stem).
+- **Slug rule (`createNote`).** The slug comes from the `title` **argument** — the body never names or
+  renames a file (§10.5's `+` passes the committed title, or `""`). A title is a simple alphanumeric
+  string: lowercase, strip a trailing `.md`, then drop every character outside `[a-z0-9]` — **no symbols,
+  spaces included**.
+  Empty → `untitled`. The `.md` strip runs *before* the drop, so title `notes.md` becomes `notes`, not
+  `notesmd`. Collisions append a **plain number**, the lowest free from 1: `untitled.md`, `untitled1.md`,
+  `untitled2.md`. The number is added *after* slugging, so it is never slugged away. The response returns
+  the resulting `note`, so the renderer never guesses an id.
+- **`createFolder` names are verbatim, not slugged.** `name` is validated (non-empty, no `/` or `\`, no
+  `.`/`..` segment, no escape from the notebook) and used as-is — a folder name may contain spaces.
+  `parent` is validated the same way; a missing `parent` → `not found`; an existing sibling → `already
+  exists`.
+- **`preview` is the raw first 60.** Collapse every whitespace run (newlines included) to a single space,
+  trim, then take 60 chars — the H1 line is part of the body and is **not** stripped, no `…` is appended
+  (presentation is the renderer's `truncateSnippet`), and Markdown punctuation stays in place.
+  `openNote` is the only call that returns the body at all.
+- **The auxiliary `title` match.** For a note whose title was skipped, the first line matching
+  `/^#\s+(.+?)\s*#*\s*$/` anywhere in the body, trimmed; no H1 ⇒ `untitled`. No code-fence parsing — a
+  `# x` inside a fence can win if it comes first. A heading shown this way is shown **as written**, symbols
+  included: it is body text, not a filename, so the alphanumeric rule below does not reach it.
+- **Error vocabulary per param.** A note-path param (`id`) that fails §9.1 path safety → `invalid id`; a
+  folder-path param (`folder`, `parent`, `path`, `targetFolder`) → `invalid name`.
+- **Degenerate targets.** `deleteFolder`/`renameFolder` on the root (`path: ""`) → `invalid name`.
+  `renameFolder`/`moveNote` onto an existing sibling → `already exists`. `moveNote` into a missing folder
+  → `not found`. `deleteFolder` treats **any** directory entry (dotfiles and non-`.md` included) as
+  content → `folder not empty` — so a folder can be blocked by a `.DS_Store` the OS dropped in, or a
+  `.tmp-…` left by an interrupted write. That is deliberate: the app never force-deletes a file it did
+  not put there; the user clears it by hand. Note ids and folder paths are validated as a *whole* path
+  (no empty/`.`/`..` segment), so a name that merely contains a dot (`v1.2`) is fine.
+- **`meta.ts` exists so the three derivations have one home.** Title, preview and slug are needed by the
+  walk (`tree.ts`), the reader (`read.ts`) and the writer (`write.ts`). Keeping them in `read.ts` (SPEC
+  §3's original four-file split) would make the walker and the writer import from the "open a note"
+  module for string helpers — backwards, and the first place the rules would get copy-pasted instead of
+  shared. `meta.ts` is I/O-free and is the pure-test target (SPEC §9.2).
+- **Moving a note into its own folder** is a no-op the renderer short-circuits (§10.5); called anyway, the
+  layer returns `{ ok: true, newId: id }` and touches no disk.
+- **Temp file for the atomic write.** `.{name}.tmp-{pid}-{rand}` in the same directory, dot-prefixed
+  **on purpose** so the §9.1 dotfile skip can never surface a half-written note in a walk.
+- **Containment check.** Lexical: `resolve()` the target and require it inside `NOTEBOOK_DIR`;
+  symlink-safe: `realpath()` the nearest existing ancestor and require the same — a leaf that does not
+  exist yet cannot be realpath'd, so its ancestor is what we resolve. This applies to folder paths as much
+  as note ids.
 
 ### 9.2 Notes-layer tests (Phase 3)
 
 - Runner: `bun test` — no dependency, no config file. It is in §4.3's script list (`test`); the
   phase's first commit must leave that script with real cases behind it.
-- Tests sit next to their subject: `src/bun/notes/paths.test.ts`, `src/bun/notes/tree.test.ts`.
-- The two highest-value targets are the pure helpers — id ↔ path mapping (every rejection in §9.1) and
-  the tree walk (dotfiles, dot-directories, non-`.md` files, nesting). No DOM, no RPC; a temp directory
-  is the only fixture.
+- Tests sit next to their subject: `src/bun/notes/paths.test.ts`, `src/bun/notes/meta.test.ts`,
+  `src/bun/notes/tree.test.ts`, `src/bun/notes/write.test.ts`.
+- The highest-value targets are the pure helpers — id ↔ path mapping (every rejection in §9.1), the
+  derivation rules (`title` in **both** branches: the name wins, and an `untitled`/`untitledN` stem falls
+  back to the H1, else `untitled` — plus `preview` and `slug`) and the tree walk (dotfiles,
+  dot-directories, non-`.md` files, nesting). `write.test.ts` drives the mutations against the same temp
+  directory (create/collision/atomic write/delete/move/rename). No DOM, no RPC; a temp directory is the
+  only fixture.
 
 ---
 
 ## 10. Features (MVP)
 
 ### 10.1 Hybrid editor
+- **Title input — the note's name.** A single-line input above the body; it is not part of the body text
+  and not Markdown. On a new note it holds focus, with `Untitled` as a *placeholder*, not content; Enter,
+  Tab and blur commit it, and Tab continues into the body. Input is constrained to the slug charset —
+  letters and digits, lowercased as it is typed — so the field always shows exactly what will be stored.
+  In the MVP it is creation-only: once the note exists the title is read-only, because editing it
+  afterwards is a rename (§14).
+- **The title is not in the body.** Nothing writes an H1 for you; the body contains exactly what the user
+  typed into the editor.
 - Focused line renders raw Markdown; all other lines render.
 - Code highlighting via the hybrid package's Prism integration.
 - Task list items render as clickable checkboxes; toggling writes back to source.
@@ -552,7 +622,7 @@ Phase 3 verification lines cannot be judged without them.
 ### 10.2 Sidebar (~280 px)
 - Folder tree (top ~140 px): recursive, expand/collapse.
 - Notes list: title, modified date, 60-char preview; active row highlighted.
-- Filter/search box; `+` to create a note in the selected folder.
+- Filter/search box; `+` to create a note in the selected folder (it starts an unsaved draft, §10.5).
 - Context menu on folders: New Subfolder, Rename Folder, Delete Folder (only
   when empty). Counts, search scope, drag-and-drop and the theme have their
   semantics pinned in §10.5.
@@ -571,11 +641,14 @@ Phase 3 verification lines cannot be judged without them.
 ### 10.5 Sidebar & shell semantics (Phase 4 decisions)
 
 - **Component names.** `FolderTree`, `NotesPanel` (the earlier drafts also said "NoteList" — one name
-  only), `Toolbar`, `StatusBar`, inside a sidebar shell under `components/`.
+  only), `TitleInput`, `Toolbar`, `StatusBar`. `TitleInput` is the editor pane's name field (§10.1), not
+  a sidebar component; the rest sit in a sidebar shell under `components/`.
 - **Store.** `store/selectedFolder.ts` (`string | null`, `null` = "All Notes"),
   `store/selectedNote.ts` (`string | null` — the active row, and what Phase 5 opens),
+  `store/draftNote.ts` (`{ folder: string } | null` — a new note with no file yet, §10.5's `+`),
   `store/theme.ts` (`"light" | "dark"`). One Zustand file each; components reach them through
-  controllers, never directly.
+  controllers, never directly. `selectedNote` stays a plain id because a draft has no id — hence its own
+  store rather than a tagged union in the selection.
 - **Theme.** `theme.ts` is the single source of truth: it writes `data-theme` on `<html>` from one
   effect and nothing else touches that attribute. Initial value: the stored preference, else
   `prefers-color-scheme`. Tokens are declared once on `:root`, with dark overrides under
@@ -593,9 +666,19 @@ Phase 3 verification lines cannot be judged without them.
   "All Notes" row meaning "move to the notebook root". Dropping a note on the folder it already lives in
   is a no-op. On success the list is re-keyed from `moveNote`'s `newId` and the row stays selected; on
   failure the row returns to its original folder and the reason is surfaced (Phase 8's toast).
-- **`+` button.** `createNote({ folder: selectedFolder ?? "", title: "Untitled" })`, then select and
-  scroll to the returned `note.id`. Collision naming is the notes layer's business (§9.1), so the
-  renderer never guesses an id.
+- **`+` button starts a draft; it writes nothing.** It sets `draftNote = { folder: selectedFolder ?? "" }`
+  and the editor opens with the title input focused. Committing a non-empty title calls
+  `createNote({ folder, title })` **once**, then clears the draft and selects the returned `note.id`;
+  skipping the title and typing into the body instead calls `createNote({ folder, title: "" })` on the
+  first body save. Either way the file is written once, already correctly named — there is no rename, and
+  walking away from a draft leaves nothing on disk. Collision naming is the notes layer's business (§9.1 —
+  `untitled`, `untitled1`, …), so the renderer never guesses an id.
+- **A colliding title is visible.** Committing `plan` when `plan.md` already exists produces `plan1.md`,
+  and the list shows `plan1` — the name the user typed is not the name they get. That is the direct cost of
+  "the name is the title" plus the collision rule, and it is why the renderer selects the returned `note`
+  rather than the name it sent.
+- **Drafts are invisible to the sidebar.** The notes list shows notes; a draft is not one until it
+  materialises.
 - **Toolbar and status bar in Phase 4 are placeholders.** The toolbar renders its action buttons
   disabled with a tooltip; the status bar renders `—` per field. Phase 4's acceptance is the shell and
   the sidebar; those two components get their behaviour in Phases 5–7.
@@ -658,6 +741,11 @@ case-only rename is legal on a case-insensitive filesystem (APFS), not a collisi
 ---
 
 ## 14. Post-MVP
+
+**Editable title — do this first.** The MVP's title input is creation-only (§10.1). Making it editable
+afterwards *is* a rename: the title is the filename, so changing it renames the file and changes the note's
+id, and the selection, the notes list and any open editor must all follow the new id. That is the whole
+reason it is deferred.
 
 Wikilinks + backlinks, tag system, Markdown keyboard shortcuts, graph view,
 export to HTML/PDF.

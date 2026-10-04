@@ -21,7 +21,7 @@ import type { RPCSchema } from "electrobun/bun";
 
 export interface NoteMeta {
   id: string; // notebook-relative path id incl. ".md", e.g. "work/ideas.md" (SPEC §9.1)
-  title: string; // first ATX H1 in the body, else the filename stem (SPEC §9.1)
+  title: string; // the note's name (its filename stem); the first H1 is only the fallback (SPEC §9.1)
   folder: string; // notebook-relative folder path, "" for the root
   updatedAt: number; // epoch ms, from the file mtime — the list's sort key (SPEC §9.1)
   preview: string; // first 60 chars of the body, whitespace runs collapsed (SPEC §9.1)

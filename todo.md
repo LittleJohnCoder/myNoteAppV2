@@ -143,10 +143,18 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 *Deps: 2. The bulk backend phase; async I/O only. The semantics are **decided**, not open — implement
 SPEC §9.1 as written, including the file split from §3.*
 
-- [ ] `src/bun/notes/` filesystem layer, one concern per file (SPEC §3): `paths.ts` (id ↔ path mapping
-      + containment checks), `tree.ts` (walk → `FolderNode` + note metas), `read.ts` (open a note and
-      derive its meta — title, preview, mtime), `write.ts` (create/save/delete/move + folder
-      create/delete/rename), with `index.ts` as the barrel `src/bun/index.ts` imports.
+*Status: the layer and its four test files **exist** in the working tree but are **unverified** — no test
+run has been recorded, and `src/bun/index.ts` still answers `getFolders` with the Phase 2 stub. Read the
+tasks below as "make these true", not "create these files": the first real job is to wire the ten handlers
+and reproduce the numbered checks under Verification. **Do not rewrite the layer** unless one of those
+checks fails — it already encodes every §9.1 ruling (slug charset, collision scheme, title precedence, the
+dot-skip, the error strings), and a rewrite silently re-decides them.*
+
+- [ ] `src/bun/notes/` filesystem layer, one concern per file (SPEC §3) — **already on disk**, so this task
+      is to *check* it rather than write it: `paths.ts` (id ↔ path mapping + containment checks), `meta.ts`
+      (pure derivations — title, preview, slug), `tree.ts` (walk → `FolderNode`, plus `listAllNotes`),
+      `read.ts` (`readNote` — open a note and derive its meta), `write.ts` (create/save/delete/move +
+      folder create/delete/rename), with `index.ts` as the barrel `src/bun/index.ts` imports.
 - [ ] Handlers for all ten methods: `getAllNotes` (meta + 60-char preview, no bodies, `updatedAt`
       desc), `getFolders` (recursive `FolderNode`, root `{ path: "", name: "Notebook" }`), `openNote`
       (body on demand, `null` when absent), `saveNote`, `createNote` (slugged filename, collision
@@ -160,23 +168,63 @@ SPEC §9.1 as written, including the file split from §3.*
       temp-file-then-`rename` (SPEC §9.1).
 - [ ] Path safety: ids, names and paths that escape `NOTEBOOK_DIR` are **rejected, not normalised**
       (SPEC §9.1).
-- [ ] `bun test` wired up (§4.3, §9.2), with `paths.test.ts` + `tree.test.ts` beside their subjects.
+- [ ] `bun test` wired up — add the `test` script to `package.json` (§4.3, §9.2), with `paths.test.ts`,
+      `meta.test.ts`, `tree.test.ts` and `write.test.ts` beside their subjects.
+- [ ] Dev-only boot smoke in `src/bun/index.ts` (`channel === "dev"` only): run the **numbered checks under
+      Verification** against the real `NOTEBOOK_DIR`, in order, printing exactly one
+      `[smoke] N ok — <what was observed>` or `[smoke] N FAIL — expected <x>, saw <y>` line per check, and
+      removing everything it created in a `finally` so a failed check leaves no litter. Temporary — it goes
+      once Phase 4 exercises the methods for real (see the closing line under Verification).
 
 **Verification**
-- Creating a note through the bridge produces a real `.md` file at the expected path; `getAllNotes`
-  then lists it with the right `folder`, `updatedAt`, `title` and `preview`.
-- Title follows SPEC §9.1 (an H1 beats the filename) and the list comes back `updatedAt` desc.
-- `getFolders` on a hand-made nested tree (2+ levels, a dotfile **and** a dot-directory, plus one
-  non-`.md` file) returns the nested tree without any of the three, with the non-`.md` file's
-  directory still walked.
-- `saveNote` rewrites the file; `deleteNote` removes it; `deleteFolder` on a non-empty folder returns
-  `{ok: false, error: "folder not empty"}` and leaves the folder on disk.
-- `moveNote` relocates the file, returns `newId`, and a subsequent `openNote(oldId)` returns `null`.
-- `renameFolder` over a folder holding notes returns `changedIds` covering every descendant, and each
-  `to` id opens the right file.
-- A traversal attempt (`..` inside an id, or an absolute path) returns
-  `{ ok: false, error: "invalid id" }` and touches nothing outside the notebook.
-- `bun run test` passes (SPEC §9.2; CODE_STYLE §14 — the highest-value tests in the app).
+
+The smoke prints exactly one line per numbered check, in the fixed form `[smoke] N ok — <what was
+observed>` or `[smoke] N FAIL — expected <x>, saw <y>`, and runs them in this order (later checks build on
+earlier ones). A single `FAIL` means the phase is not done. These checks are the acceptance criteria — the
+prose list they replace was not reproducible.
+
+1. `createNote(NOTEBOOK_DIR, "", "My Note")` → `{ ok: true }`, the returned `note.id` is `mynote.md`, that
+   file exists and is 0 bytes, `note.title` is `mynote`, `note.preview` is `""`.
+2. Two more `createNote(NOTEBOOK_DIR, "", "")` calls → ids `untitled.md` then `untitled1.md` (the lowest
+   free number, added after slugging), and `getAllNotes` lists **all three** as `untitled` — their stems
+   match the no-title pattern and an empty body has no H1 to fall back to.
+3. `writeNote(NOTEBOOK_DIR, "untitled.md", "# Hello, World!\n\nbody")` → that row now titles
+   `Hello, World!` with a preview starting `# Hello, World!`, and its `id` is **still** `untitled.md`. A
+   filename comes only from `createNote`'s `title` argument; only an untitled note uses the H1 fallback.
+4. `getAllNotes` comes back `updatedAt` descending, ties broken by `id` ascending, and every row carries
+   `folder`, `title`, `preview` and **no** `content`.
+5. Hand-make `Ideas/2026/plan.md`, `Ideas/2026/other.md`, `Ideas/notes.txt`, `Ideas/.hidden.md`,
+   `.secret/deep.md`, `Archive/Old.md`, `-root.md`, then `getFolders` → root
+   `{ path: "", name: "Notebook" }` containing `Ideas` (with child `2026`) and `Archive` — no dot-file, no
+   dot-directory, and `Ideas` is still walked even though `notes.txt` is not a note.
+6. With that tree present, the ids from `getAllNotes` are exactly `-root.md`, `Archive/Old.md`,
+   `Ideas/2026/other.md`, `Ideas/2026/plan.md`, `mynote.md`, `untitled.md` (checks 1–3 are still on disk),
+   and `plan`'s title is `plan`. The name beats the H1.
+7. `readNote(NOTEBOOK_DIR, "Ideas/2026/plan.md")` returns the body; `readNote` on a missing id returns
+   `null`, not an error.
+8. `createFolder(NOTEBOOK_DIR, "Ideas", "Drafts")` → `ok`; the identical call again → `already exists`.
+   `createFolder` does not slugify and does not create missing parents.
+9. `createNote(NOTEBOOK_DIR, "Ideas/Drafts", "Draft")` → `Ideas/Drafts/draft.md`;
+   `deleteFolder(NOTEBOOK_DIR, "Ideas/Drafts")` → `{ ok: false, error: "folder not empty" }` **and** the
+   directory is still on disk.
+10. `deleteNote(NOTEBOOK_DIR, "Ideas/Drafts/draft.md")` → `ok` and the file is gone; the repeat →
+    `not found`; `deleteFolder` on `Ideas/Drafts` now → `ok`.
+11. `moveNote(NOTEBOOK_DIR, "Ideas/2026/plan.md", "Archive")` → `{ ok: true, newId: "Archive/plan.md" }`,
+    the file is at the new path, and `readNote` on the old id → `null`. `moveNote` into the note's own
+    folder → `{ ok: true, newId: <the same id> }` with the file's mtime unchanged (no disk touch).
+12. `renameFolder(NOTEBOOK_DIR, "Ideas", "Notes")` → `changedIds` covering every descendant (here exactly
+    `{ from: "Ideas/2026/other.md", to: "Notes/2026/other.md" }`), and each `to` id opens the right file
+    while its `from` id → `null`.
+13. Path safety: `../x.md` and `/etc/passwd` as an id, `Ideas/../../x.md` as a folder path, and a name
+    containing `/` each return `{ ok: false, error: "invalid id" }` or `"invalid name"` as §9.1 says, and
+    nothing outside `NOTEBOOK_DIR` appears afterwards. `deleteFolder(NOTEBOOK_DIR, "")` → `invalid name`.
+14. `bun run test` passes (SPEC §9.2; CODE_STYLE §14 — the highest-value tests in the app).
+
+The smoke is the only Phase 3 channel that reaches the ten methods end to end: `bun test` drives the pure
+layer against a `mkdtemp` fixture, while the smoke drives the layer **functions** against the real
+`NOTEBOOK_DIR` — functions and not handlers, because the RPC object exposes no handler map (SPEC §15).
+Phase 2 already proved the bridge itself; nothing here needs to cross the wire, and Phase 4 is where the UI
+exercises the methods for real.
 
 ## Phase 4 — App shell + sidebar (tree, notes list, selection, search, folder ops)
 
@@ -186,13 +234,15 @@ SPEC §9.1 as written, including the file split from §3.*
 - [ ] CSS tokens on `:root` + `[data-theme="dark"]` overrides (CODE_STYLE §11.2/§11.3).
 - [ ] Stores (Zustand, one file each, reached only through controllers): `store/selectedFolder.ts`
       (`string | null`, `null` = "All Notes"), `store/selectedNote.ts` (`string | null` — the active
-      row, and what Phase 5 opens), `store/theme.ts` (`"light" | "dark"`, the single writer of
-      `<html data-theme>`, initial value from the stored preference else `prefers-color-scheme`).
+      row, and what Phase 5 opens), `store/draftNote.ts` (`{ folder: string } | null` — a new note with
+      no file yet), `store/theme.ts` (`"light" | "dark"`, the single writer of `<html data-theme>`,
+      initial value from the stored preference else `prefers-color-scheme`).
 - [ ] Components (§10.5): `FolderTree` (recursive, expand/collapse with ancestors auto-expanded,
       recursive note counts), `NotesPanel` (title, modified date, 60-char preview, active row
       highlighted), `Toolbar` and `StatusBar` placeholders.
-- [ ] `+` button → `createNote({ folder: selectedFolder ?? "", title: "Untitled" })`, then select the
-      returned `note.id`.
+- [ ] `+` button → starts a draft (`draftNote = { folder: selectedFolder ?? "" }`); it writes **nothing**.
+      Committing a title creates the note through `createNote` and selects the returned `note.id`;
+      skipping the title and typing a body creates it on the first save with `title: ""` (SPEC §10.5).
 - [ ] Search box filtering the notes list by title + preview — case-insensitive substring, ~150 ms
       debounce, scoped to the selected folder's subtree or global when none is selected, the query
       surviving a folder switch (SPEC §10.4, §10.5).
@@ -214,6 +264,8 @@ SPEC §9.1 as written, including the file split from §3.*
   and the selected note stays selected under its new id.
 - Toggling the theme flips `data-theme` on `<html>` and the whole shell follows (no per-component JS
   theme checks).
+- `+` opens a draft and writes **no** file: click it, then abort by selecting another note — the notebook
+  on disk is unchanged, with no `untitled.md` litter.
 
 ## Phase 5 — Editor: mount, hybrid render, open/save persistence
 
@@ -223,6 +275,11 @@ SPEC §9.1 as written, including the file split from §3.*
       (`@codemirror/lang-markdown` + `codemirror-markdown-hybrid`, KaTeX + mermaid options).
 - [ ] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
       config.
+- [ ] Title input above the body (SPEC §10.1): focused when a draft opens, `Untitled` placeholder, input
+      constrained to letters/digits and lowercased, Enter/Tab/blur commits it, Tab continues into the body.
+- [ ] Committing a draft's title calls `createNote` once, clears `draftNote`, selects the returned
+      `note.id`; typing into the body instead creates the note on the first save with `title: ""`.
+- [ ] Once a note exists its title is read-only — the MVP has no rename (SPEC §14).
 - [ ] Opening a note loads its body into the editor; the focused line is raw, other lines render.
 - [ ] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the
       client directly).
@@ -235,6 +292,11 @@ SPEC §9.1 as written, including the file split from §3.*
 - Quit and relaunch → the last edit is still present.
 - Rapidly switching notes while a debounce is pending does not corrupt either file.
 - Word/line counts and the path in the status bar match the open note.
+- Pressing `+` puts the cursor in the title field; Tab reaches the body without creating anything yet.
+- Type `plan`, press Enter → `plan.md` exists on disk, the list shows `plan`, and the row is selected.
+- Press `+`, Tab straight into the body, type a line → `untitled.md` holds exactly that text with no title
+  line added, and the list shows the body's first H1 if there is one, else `untitled`.
+- The title is not in the body: opening the `.md` directly shows only what was typed into the editor body.
 
 ## Phase 6 — Interactive markdown: task write-back, collapse, math, mermaid, theme sync
 
