@@ -17,7 +17,8 @@
   "dependencies": {
     "electrobun": "1.18.1",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",

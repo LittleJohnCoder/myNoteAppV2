@@ -1,10 +1,11 @@
-/* Phase 1 keeps styling to the token layer + the shell. Full sidebar/editor tokens
-   arrive with their components (CODE_STYLE.md §11). */
+/* The whole shell's styling: tokens, layout, and one block per component (CODE_STYLE §11.2,
+   §11.4 — global `styles.css`, no per-component stylesheets, no utility classes). */
 
 :root {
   --color-text: #1b1f23;
   --color-text-muted: #6a737d;
   --color-surface: #ffffff;
+  --color-canvas: #f6f8fa;
   --color-surface-hover: #f6f8fa;
   --color-border-divider: #eaecef;
   --color-accent: #2f81f7;
@@ -17,12 +18,20 @@
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
+
+  --sidebar-width: 280px;
+  --editor-max-width: 1200px;
+  /* SPEC §10.2 sketches the tree at ~140 px: that is its floor, and it grows with the notebook
+     before it starts to scroll. */
+  --tree-min-height: 140px;
+  --row-depth-indent: 12px;
 }
 
 :root[data-theme="dark"] {
   --color-text: #e6edf3;
   --color-text-muted: #8b949e;
   --color-surface: #161b22;
+  --color-canvas: #0d1117;
   --color-surface-hover: #1f242c;
   --color-border-divider: #30363d;
   --color-accent: #58a6ff;
@@ -42,73 +51,274 @@ body {
   font-family: var(--font-ui);
 }
 
+/* Shell — sidebar + editor pane + status bar (SPEC §10.3). The window is 1100x750 by design
+   (D1), so the editor pane takes what is left and only reaches its 1200 px target once the
+   window is widened past the sidebar. */
 .shell {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
   height: 100%;
   box-sizing: border-box;
 }
 
-.shell__header {
-  border-bottom: 1px solid var(--color-border-divider);
-  padding-bottom: var(--space-2);
+.shell__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
-.shell__title {
+/* Sidebar */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
+  min-height: 0;
+  box-sizing: border-box;
+  border-right: 1px solid var(--color-border-divider);
+  overflow: hidden;
+}
+
+.sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+}
+
+.sidebar__title {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
 }
 
-.shell__meta {
-  margin: var(--space-1) 0 0;
-  color: var(--color-text-muted);
-  font-family: var(--font-editor);
-  font-size: 0.8125rem;
-}
-
-.shell__note {
-  color: var(--color-text-muted);
-  font-size: 0.875rem;
-}
-
-/* Phase 2 bridge-proof panel. Phase 4 replaces it with the real sidebar/editor layout. */
-.shell__panel {
+.sidebar__new {
   border: 1px solid var(--color-border-divider);
   border-radius: var(--radius-note);
-  padding: var(--space-3);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 1rem;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
 }
 
-.shell__panel-title {
-  margin: 0 0 var(--space-2);
-  font-size: 0.9375rem;
+.sidebar__new:hover {
+  background: var(--color-surface-hover);
 }
 
-.shell__list {
-  margin: var(--space-2) 0;
-  padding-left: var(--space-3);
-  font-family: var(--font-editor);
-  font-size: 0.8125rem;
-}
-
-.shell__proof {
-  margin: 0;
-  color: var(--color-accent);
-  font-family: var(--font-editor);
-  font-size: 0.8125rem;
-}
-
-.shell__error {
+.sidebar__error {
+  margin: 0 var(--space-3) var(--space-2);
   color: var(--color-danger);
-  font-size: 0.875rem;
+  font-size: 0.8125rem;
 }
 
-/* TEMPORARY Phase-2 probe target for the Edit-menu accelerator check (see App.tsx). */
-.shell__edit-probe {
+/* Search */
+.search {
+  margin: 0 var(--space-3) var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-note);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+}
+
+.search:focus-visible,
+.tree__label:focus-visible,
+.notes__row:focus-visible,
+.sidebar__new:focus-visible,
+.status-bar__toggle:focus-visible,
+.toolbar__button:focus-visible,
+.context-menu__item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* Folder tree */
+.tree {
+  flex: 0 1 auto;
+  min-height: var(--tree-min-height);
+  max-height: 45%;
+  overflow: auto;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-divider);
+}
+
+.tree__children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree__item {
+  list-style: none;
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+}
+
+.tree__twisty {
+  flex: 0 0 auto;
+  width: 18px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.tree__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  padding-left: calc(var(--space-2) + var(--row-depth, 0) * var(--row-depth-indent));
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree__label:hover {
+  background: var(--color-surface-hover);
+}
+
+.tree__row_selected .tree__label {
+  background: var(--color-surface-hover);
+  border-left-color: var(--color-accent);
+  font-weight: 600;
+}
+
+.tree__row_drop .tree__label {
+  border-left-color: var(--color-accent);
+  background: var(--color-surface-hover);
+  outline: 1px dashed var(--color-accent);
+  outline-offset: -1px;
+}
+
+.tree__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree__count {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.tree__name-input {
+  display: block;
+  margin: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-note);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+}
+
+/* Notes list */
+.notes {
+  flex: 1;
+  margin: 0;
+  padding: var(--space-2) 0;
+  list-style: none;
+  overflow: auto;
+}
+
+.notes__item {
+  list-style: none;
+}
+
+.notes__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.notes__row:hover {
+  background: var(--color-surface-hover);
+}
+
+.notes__row_active {
+  background: var(--color-surface-hover);
+  border-left-color: var(--color-accent);
+}
+
+.notes__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.notes__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notes__modified,
+.notes__preview {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.notes__empty {
+  margin: 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
+/* Editor pane (Phase 4 placeholder) */
+.editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  max-width: var(--editor-max-width);
+  background: var(--color-canvas);
+}
+
+.editor__surface {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3);
+  overflow: auto;
+}
+
+.editor__placeholder {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-family: var(--font-editor);
+  font-size: 0.8125rem;
+}
+
+.editor__edit-probe {
   width: 100%;
   box-sizing: border-box;
-  margin-top: var(--space-2);
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--color-border-divider);
   border-radius: var(--radius-note);
@@ -116,4 +326,118 @@ body {
   color: var(--color-text);
   font-family: var(--font-editor);
   font-size: 0.8125rem;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-divider);
+  background: var(--color-surface);
+}
+
+.toolbar__button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-note);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+}
+
+.toolbar__button:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* Status bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-divider);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.status-bar__location {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__toggle {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-note);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+/* Folder context menu */
+.context-menu {
+  position: fixed;
+  left: var(--menu-x);
+  top: var(--menu-y);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border-divider);
+  border-radius: var(--radius-note);
+  background: var(--color-surface);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+}
+
+.context-menu__target {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu__item {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-note);
+  background: none;
+  color: var(--color-text);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu__item:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.context-menu__item_danger {
+  color: var(--color-danger);
+}
+
+.context-menu__item:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* Loading */
+.load__skeleton {
+  margin: var(--space-2) var(--space-3);
+  height: 1em;
+  border-radius: var(--radius-note);
+  background: var(--color-surface-hover);
 }

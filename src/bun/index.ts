@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { NotesRPC } from "../shared/types";
-import { waitForDomText, type EvaluateScript } from "./domProbe";
 import {
   createFolder,
   createNote,
@@ -16,13 +15,11 @@ import {
   renameFolder,
   writeNote,
 } from "./notes";
+import { runPhase4Probe } from "./phase4Probe";
 import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
 const DEV_SERVER_URL = "http://localhost:5173";
-
-// The one value Phase 2 pushes bun → view; the view renders it and the DOM probe looks for it.
-const PUSH_PROBE_ID = "phase-2-stub.md";
 
 /**
  * SPEC §9, §15.9: writable app data lives under `Utils.paths.userData` — never next to the
@@ -137,28 +134,26 @@ mainWindow.webview.on("dom-ready", () => {
 });
 
 /**
- * Phase 3 boot smoke (todo.md): dev only, and temporary — it goes once Phase 4 exercises the
- * methods for real. It drives the notes-layer barrel (checks 1–13) and this file's handler map
- * (checks 14–17) against the real `NOTEBOOK_DIR`, so the wiring is proven, not assumed.
+ * The Phase 3 boot smoke (todo.md): dev only, and temporary. It drives the notes-layer barrel
+ * (checks 1–13) and this file's handler map (checks 14–17) against the real `NOTEBOOK_DIR`, so the
+ * wiring is proven, not assumed. Its promise is awaited before the Phase 4 probe starts — both
+ * seed the same notebook, and the smoke asserts *exact* id sets.
  */
-if (channel === "dev") {
-  void runPhase3Smoke({ dir: NOTEBOOK_DIR, handlers: notesHandlers });
-}
+const phase3Done =
+  channel === "dev"
+    ? runPhase3Smoke({ dir: NOTEBOOK_DIR, handlers: notesHandlers })
+    : Promise.resolve();
 
 let hasHandshaked = false;
 
 /**
  * Runs once per launch, after the view reports itself ready. This is the half of the bridge a
  * round trip cannot exercise on its own (SPEC §15.21: the two message directions live in
- * different schema halves), so each direction is proven separately here:
+ * different schema halves), so in dev it hands the live view to the Phase 4 DOM probe.
  *
- *   1. view → bun  — this function only runs because `viewReady` arrived.
- *   2. bun → view  — the two `send` calls below (fire-and-forget, both declared payload kinds).
- *   3. rendered    — the DOM probe reads the view's own text back through the view-served
- *                    `evaluateJavascriptWithResponse` request, which is the third direction
- *                    (bun → view request/response).
- *
- * The probe is dev-only: in a packaged build there is no terminal to print it to.
+ * The probe drives the real UI from the bun side — the Phase 2 push-and-read proof retired with
+ * the placeholder shell it proved (todo.md Phase 4): the view now renders the real notebook, and
+ * what the probe reads is the app.
  */
 async function handleViewReady({ url }: { url: string }): Promise<void> {
   if (hasHandshaked) return; // React StrictMode mounts the shell twice in dev
@@ -170,7 +165,9 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
   // RPC half), so it is always set by the time the view can talk to us — guard, don't assert.
   const { rpc } = mainWindow.webview;
   if (!rpc) {
-    console.error("[bun] view is ready but the webview has no RPC half — pushes skipped");
+    console.error(
+      "[bun] view is ready but the webview has no RPC half — the Phase 4 probe is skipped",
+    );
     return;
   }
 
@@ -178,31 +175,14 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
     level: "info",
     msg: `bun received viewReady from ${url}`,
   });
-  rpc.send.noteChanged({ id: PUSH_PROBE_ID, updatedAt: Date.now() });
 
   if (channel !== "dev") return;
 
-  const evaluate: EvaluateScript = (script) =>
-    rpc.request.evaluateJavascriptWithResponse({ script });
+  await phase3Done;
 
-  const { matched, text } = await waitForDomText(
-    evaluate,
-    {
-      // Read the whole shell, not just the push line: one probe then covers both the tree
-      // response (getFolders) and the push, because both are rendered in this text.
-      script: 'return document.querySelector("main.shell")?.textContent ?? ""',
-      needle: PUSH_PROBE_ID,
-    },
-    { timeoutMs: 5_000 },
-  );
-
-  if (matched) {
-    console.log(`[bun] view DOM proof OK — the bun → view push rendered: ${text.trim()}`);
-    return;
-  }
-  console.error(
-    `[bun] view DOM proof FAILED — "${PUSH_PROBE_ID}" never appeared in the view (last text: ${JSON.stringify(
-      text,
-    )})`,
-  );
+  await runPhase4Probe({
+    dir: NOTEBOOK_DIR,
+    evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+    pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+  });
 }
