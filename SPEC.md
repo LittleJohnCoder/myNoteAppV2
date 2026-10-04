@@ -81,7 +81,14 @@ myNoteAppV2/
 ├── vite.config.ts              # builds the React renderer into dist/
 ├── src/
 │   ├── bun/
-│   │   └── index.ts            # main process (Bun runtime) — RPC handlers + window
+│   │   ├── index.ts            # main process (Bun runtime) — RPC handlers + window
+│   │   ├── domProbe.ts         # dev-only "read the live DOM" channel (§15.22)
+│   │   └── notes/              # filesystem layer — one concern per file (§9.1)
+│   │       ├── index.ts        # barrel exporting the functions §5 imports
+│   │       ├── paths.ts        # id ↔ path mapping + containment checks
+│   │       ├── tree.ts         # tree walk → FolderNode + note metas
+│   │       ├── read.ts         # open a note; derive meta (title, preview, mtime)
+│   │       └── write.ts        # create/save/delete/move + folder create/delete/rename
 │   ├── shared/
 │   │   └── types.ts            # RPC schema + DTOs, imported by BOTH halves
 │   └── mainview/               # renderer root (Vite `root`)
@@ -89,8 +96,11 @@ myNoteAppV2/
 │       ├── main.tsx            # React entry (createRoot)
 │       ├── rpc.ts              # Electroview.defineRPC + exported client
 │       ├── App.tsx
-│       ├── components/         # Sidebar, FolderTree, NoteList, Toolbar, StatusBar
+│       ├── components/         # sidebar shell: FolderTree, NotesPanel, Toolbar, StatusBar
 │       ├── hooks/              # controllers: use<X>Controller()
+│       ├── services/           # thin wrappers over the RPC client (CODE_STYLE §9.2)
+│       ├── store/              # Zustand: selectedFolder, selectedNote, theme (§10.5)
+│       ├── utils/              # pure helpers (folder-tree flatten, …)
 │       ├── editor/             # CodeMirror + hybrid plugin wiring
 │       └── styles.css          # plain CSS (no Tailwind)
 └── dist/                       # Vite output — generated; Electrobun copies it into views/
@@ -170,12 +180,17 @@ export default defineConfig({
 
 ```jsonc
 "scripts": {
-  "start":        "vite build && electrobun dev",
-  "dev":          "electrobun dev --watch",
-  "dev:hmr":      "concurrently \"bun run hmr\" \"bun run start\"",
-  "hmr":          "vite --port 5173",
-  "build:canary": "vite build && electrobun build --env=canary",
-  "build:stable": "vite build && electrobun build --env=stable"
+  // product minimum
+  "start":          "bun run build:renderer && electrobun dev",
+  "dev":            "electrobun dev --watch",
+  "dev:hmr":        "concurrently \"bun run hmr\" \"bun run start\"",
+  "hmr":            "vite --port 5173",
+  "build:canary":   "bun run build:renderer && electrobun build --env=canary",
+  "build:stable":   "bun run build:renderer && electrobun build --env=stable",
+  // ours: renderer alone, the type gate (§15.15) and the unit tests (§9.2)
+  "build:renderer": "vite build",
+  "type-check":     "bash scripts/typecheck.sh",
+  "test":           "bun test"
 }
 ```
 
@@ -188,6 +203,10 @@ export default defineConfig({
 | `electrobun dev --watch` | rebuild on entrypoint/view/copy changes |
 | `electrobun build --env=dev\|canary\|stable` | produce distributables |
 | `electrobun run` | run a built app |
+
+`start` and the two build scripts go through `build:renderer` rather than calling `vite build`
+directly, so the renderer can be rebuilt on its own. `test` arrives with the notes layer (Phase 3,
+§9.2) and holds no cases until then.
 
 Watch mode watches `build.bun.entrypoint`'s directory, each view entrypoint's
 directory, `build.copy` inputs and `build.watch`; `build.watchIgnore` excludes
@@ -209,8 +228,8 @@ import {
 import { join } from "node:path";
 import { mkdir } from "node:fs/promises";
 import type { NotesRPC } from "../shared/types";
-import { listAllNotes, readFolderTree, readNote, writeNote,
-         createNote, deleteNote, createFolder, deleteFolder, moveNote } from "./notes";
+import { listAllNotes, readFolderTree, readNote, writeNote, createNote,
+         deleteNote, createFolder, deleteFolder, moveNote, renameFolder } from "./notes";
 
 // Writable app data lives under Utils.paths.userData — NOT next to the bundle.
 export const NOTEBOOK_DIR = join(Utils.paths.userData, "notebook");
@@ -219,6 +238,8 @@ await mkdir(NOTEBOOK_DIR, { recursive: true });
 const notesRPC = BrowserView.defineRPC<NotesRPC>({
   maxRequestTime: 10_000,
   handlers: {
+    // Handlers stay one-liners: the notes layer returns the §7 envelopes itself (§9.1), so there
+    // is no error plumbing to duplicate here.
     requests: {
       getAllNotes:   async () => listAllNotes(NOTEBOOK_DIR),
       getFolders:    async () => readFolderTree(NOTEBOOK_DIR),
@@ -229,8 +250,14 @@ const notesRPC = BrowserView.defineRPC<NotesRPC>({
       createFolder:  async ({ parent, name }) => createFolder(NOTEBOOK_DIR, parent, name),
       deleteFolder:  async ({ path }) => deleteFolder(NOTEBOOK_DIR, path),
       moveNote:      async ({ id, targetFolder }) => moveNote(NOTEBOOK_DIR, id, targetFolder),
+      renameFolder:  async ({ path, name }) => renameFolder(NOTEBOOK_DIR, path, name),
     },
-    messages: {},
+    messages: {
+      // The view's readiness handshake (§7). Every bun → view push is sent from this handler and
+      // never straight after the window is created, because sends are not queued. The live half is
+      // a one-shot handler: log the handshake, push, and (dev only) read the DOM back.
+      viewReady: (payload) => void handleViewReady(payload),
+    },
   },
 });
 
@@ -275,7 +302,9 @@ import type { NotesRPC } from "../shared/types";
 const rpc = Electroview.defineRPC<NotesRPC>({
   maxRequestTime: 30_000,
   handlers: {
-    requests: {},                                  // bun may call into the view too
+    requests: {},   // nothing extra to serve: the view's built-in evaluateJavascriptWithResponse
+                    // (§7) is merged in by defineRPC, and declaring it in the shared schema is
+                    // what makes it callable from bun with types (§15.22)
     messages: { logToWebview: ({ level, msg }) => console[level](msg) },
   },
 });
@@ -283,6 +312,10 @@ const rpc = Electroview.defineRPC<NotesRPC>({
 export const electroview = new Electroview({ rpc });
 export const notes = electroview.rpc.request;       // notes.getAllNotes({}) → Promise
 ```
+
+Take the client from the **local binding**, as above: `rpc` is optional on the `Electroview` instance
+type, so `electroview.rpc.request` needs an assertion while the binding is already non-optional.
+`src/mainview/rpc.ts` exports the binding for exactly that reason.
 
 The renderer half is `Electroview.defineRPC` from `electrobun/view`, and the
 instance is created with `new Electroview({ rpc })`.[6] Controllers call the bun
@@ -317,28 +350,44 @@ compile time.[5][11]
 import type { RPCSchema } from "electrobun/bun";
 
 export type NoteMeta = {
-  id: string;          // path-relative id, e.g. "work/ideas.md"
-  title: string;
+  id: string;          // notebook-relative path id incl. ".md", e.g. "work/ideas.md" (§9.1)
+  title: string;       // first ATX H1, else the filename stem (§9.1)
   folder: string;      // relative folder path, "" for root
-  updatedAt: number;   // epoch ms
-  preview: string;     // first ~60 chars of body
+  updatedAt: number;   // epoch ms, from the file mtime — also the sort key (§9.1)
+  preview: string;     // first 60 chars of body, whitespace runs collapsed (§9.1)
   content?: string;    // only populated by openNote
 };
 
 export type FolderNode = { path: string; name: string; children: FolderNode[] };
 
+// Every mutating method answers with one of these envelopes (§9.1). Expected failures are *returned*,
+// not thrown, so the renderer can name a reason (Phase 8's toast) without a try/catch per call. These
+// are the names `src/shared/types.ts` exports, so the schema and the code agree by name, not just shape.
+export type MutationResult = { ok: boolean; error?: string };
+export type SaveNoteResult = MutationResult & { updatedAt: number };
+export type CreateNoteResult = MutationResult & { note?: NoteMeta };   // the slugged note itself, so
+                                                                       // the renderer never has to guess
+export type CreateFolderResult = MutationResult & { path: string };
+export type MoveNoteResult = MutationResult & { newId: string };
+export type RenamedId = { from: string; to: string };                  // every descendant note's id
+export type RenameFolderResult = MutationResult & { path: string; changedIds: RenamedId[] };
+
 export type NotesRPC = {
   bun: RPCSchema<{
     requests: {
-      getAllNotes:   { params: {};                              response: NoteMeta[] };
-      getFolders:    { params: {};                              response: FolderNode };
-      openNote:      { params: { id: string };                  response: NoteMeta | null };
-      saveNote:      { params: { id: string; content: string }; response: { ok: boolean; updatedAt: number } };
-      createNote:    { params: { folder: string; title: string }; response: NoteMeta };
-      deleteNote:    { params: { id: string };                  response: { ok: boolean } };
-      createFolder:  { params: { parent: string; name: string }; response: { ok: boolean; path: string } };
-      deleteFolder:  { params: { path: string };                response: { ok: boolean; error?: string } };
-      moveNote:      { params: { id: string; targetFolder: string }; response: { ok: boolean; newId: string } };
+      getAllNotes:   { params: {};                                  response: NoteMeta[] };
+      getFolders:    { params: {};                                  response: FolderNode };
+      openNote:      { params: { id: string };                      response: NoteMeta | null };
+      saveNote:      { params: { id: string; content: string };     response: SaveNoteResult };
+      createNote:    { params: { folder: string; title: string };   response: CreateNoteResult };
+      deleteNote:    { params: { id: string };                      response: MutationResult };
+      createFolder:  { params: { parent: string; name: string };    response: CreateFolderResult };
+      deleteFolder:  { params: { path: string };                    response: MutationResult };
+      moveNote:      { params: { id: string; targetFolder: string }; response: MoveNoteResult };
+      // Phase 4 addition: §10.2 listed "Rename Folder" from the start, but the original §7 had no
+      // method for it. Note ids are paths, so renaming a folder re-ids every note below it — hence
+      // the map, and hence `changedIds` is empty (never absent) when the folder holds no notes.
+      renameFolder:  { params: { path: string; name: string };      response: RenameFolderResult };
     };
     messages: {
       // Messages the bun side RECEIVES — i.e. sent by the view.
@@ -362,7 +411,11 @@ export type NotesRPC = {
     messages: {
       // Messages the view RECEIVES — i.e. sent by bun. See §5 for the send call.
       logToWebview: { level: "info" | "error"; msg: string };
-      noteChanged: { id: string; updatedAt: number };        // bun → view push
+      // Sent after every successful saveNote/createNote, carrying that note's id and updatedAt (§9.1).
+      // The view may ignore the echo of its own write; this exists as the reconciliation signal for a
+      // later second window or an external edit. delete/move/rename are deliberately NOT covered — the
+      // view initiated those and re-reads the tree itself; a coarse "re-read" push is post-MVP.
+      noteChanged: { id: string; updatedAt: number };
     };
   }>;
 };
@@ -382,6 +435,11 @@ Rules that are easy to get wrong:
 - bun → view sends are **not queued**: a `send` issued before the view's socket is open is dropped
   with no error, which is why the schema above carries the `viewReady` handshake rather than pushing
   straight after `new BrowserWindow(...)`.
+- Every **mutation** answers with `{ ok, …payload, error? }` and returns expected failures instead of
+  throwing (§9.1). Reads return data and use `null` for absence. If a call rejects, it is a bug or an
+  unimplemented method — not a missing file.
+- **Ids change.** An id is a path, so `moveNote` and `renameFolder` invalidate it: the caller re-keys
+  its state from `newId` / `changedIds` rather than assuming the old id still resolves (§12).
 
 Type-safety fallback: the v1 notes-app defines the view-side type without
 `RPCSchema` to avoid pulling bun code into the view bundle[12]; the `RPCSchema`
@@ -414,10 +472,64 @@ form above is the documented approach and works because it is type-only.[5]
   notebook-relative path, so moving a note changes its `id` and its folder.
 - Writes: save-on-blur plus a 500 ms debounce while typing.
 - Reads: `getAllNotes` walks the tree (skipping dotfiles) for meta + preview;
-  `openNote` reads the full body on demand.
+  `openNote` reads the full body on demand. Title derivation, preview formatting, filtering and
+  ordering are pinned in §9.1.
 - I/O: use async Bun/`node:fs` APIs. RPC handlers run on the main-process event
   loop that also drives the window — synchronous I/O on a large vault stalls the
   whole app.
+
+---
+
+### 9.1 Notes-layer semantics (Phase 3 decisions)
+
+Each of these was open in the Phase 3 draft and is now a decision. Implement them as written — the
+Phase 3 verification lines cannot be judged without them.
+
+- **`id`.** Notebook-relative, `/`-separated, and **includes the `.md` extension**
+  (`"Ideas/2026/plan.md"`). The notebook root is `path: ""` / `folder: ""`.
+- **Title.** The first ATX H1 (`# …`) in the body, trimmed; if there is none, or the body is empty, the
+  filename stem. A note's `title` may therefore differ from its filename — which is correct, because
+  nothing in the MVP renames a file: the toolbar is formatting-only and there is no rename action.
+- **Filenames from `createNote`.** `title` is slugified — lowercase, spaces → `-`, every character
+  outside `[a-z0-9-_.]` dropped (including `/` and `\`, so a title cannot escape the notebook). An empty
+  result becomes `untitled`. A collision appends ` 2`, ` 3`, … before the extension
+  (`plan.md` → `plan 2.md`). The response returns the resulting `note`, so the renderer never guesses
+  an id.
+- **Failure shape.** Mutations return `ok: false` with a short `error` string instead of throwing:
+  `not found`, `invalid id`, `invalid name`, `already exists`, `folder not empty`. Reads
+  (`getAllNotes`, `getFolders`, `openNote`) return data and use `null` for absence; only genuine bugs
+  reject.
+- **Path safety.** An `id` must be `/`-separated, non-empty, not absolute, free of any `..` segment, and
+  after `resolve()` against `NOTEBOOK_DIR` — symlinks included — still inside it. Anything else →
+  `{ ok: false, error: "invalid id" }`. Ids are **rejected, never silently normalised**: a normalised id
+  leaves the renderer holding a stale key. `name`s and `parent`/`path` params get the same treatment
+  (`invalid name`).
+- **Timestamps.** `updatedAt` is the file's mtime in epoch ms, read at list/open time — not a stored
+  field. It is both the sort key and the "modified date" in the list, so one source keeps them agreeing.
+- **Preview.** The body's first 60 characters after collapsing every whitespace run (newlines included)
+  to a single space and trimming, with Markdown punctuation left in place. `openNote` is the only call
+  that returns the body.
+- **Tree walk.** Notes are `*.md` files (extension compared case-insensitively). Dot-**files** and
+  dot-**directories** are skipped at any depth; other extensions are ignored as notes, but their
+  directories are still walked so nesting is not lost.
+- **Root node.** `getFolders` returns `{ path: "", name: "Notebook", children: […] }` — the root's name is
+  fixed, not derived from the userData path.
+- **Sort order.** `getAllNotes` → `updatedAt` descending, ties broken by `id` ascending.
+  `FolderNode.children` → `name` ascending, locale-aware and case-insensitive. Nothing else states an
+  order, and "the list filters to that folder" is only checkable against a fixed one.
+- **Atomic writes.** Write to a sibling temp file in the same directory, then `rename()` — so quitting
+  during the 500 ms save debounce can never leave a half-written note.
+- **When `noteChanged` fires.** After every successful `saveNote`/`createNote`, with that note's id and
+  `updatedAt`. Nothing sends it today (Phase 2 declared the message; §7 records the trigger).
+
+### 9.2 Notes-layer tests (Phase 3)
+
+- Runner: `bun test` — no dependency, no config file. It is in §4.3's script list (`test`); the
+  phase's first commit must leave that script with real cases behind it.
+- Tests sit next to their subject: `src/bun/notes/paths.test.ts`, `src/bun/notes/tree.test.ts`.
+- The two highest-value targets are the pure helpers — id ↔ path mapping (every rejection in §9.1) and
+  the tree walk (dotfiles, dot-directories, non-`.md` files, nesting). No DOM, no RPC; a temp directory
+  is the only fixture.
 
 ---
 
@@ -442,7 +554,8 @@ form above is the documented approach and works because it is type-only.[5]
 - Notes list: title, modified date, 60-char preview; active row highlighted.
 - Filter/search box; `+` to create a note in the selected folder.
 - Context menu on folders: New Subfolder, Rename Folder, Delete Folder (only
-  when empty).
+  when empty). Counts, search scope, drag-and-drop and the theme have their
+  semantics pinned in §10.5.
 
 ### 10.3 Layout & status bar
 - Sidebar + editor pane (~1200 px target width).
@@ -452,6 +565,40 @@ form above is the documented approach and works because it is type-only.[5]
 ### 10.4 Multi-folder
 - Unlimited nesting; drag a note onto a folder to move it (`moveNote`).
 - Global search across all notes when no folder is selected.
+
+---
+
+### 10.5 Sidebar & shell semantics (Phase 4 decisions)
+
+- **Component names.** `FolderTree`, `NotesPanel` (the earlier drafts also said "NoteList" — one name
+  only), `Toolbar`, `StatusBar`, inside a sidebar shell under `components/`.
+- **Store.** `store/selectedFolder.ts` (`string | null`, `null` = "All Notes"),
+  `store/selectedNote.ts` (`string | null` — the active row, and what Phase 5 opens),
+  `store/theme.ts` (`"light" | "dark"`). One Zustand file each; components reach them through
+  controllers, never directly.
+- **Theme.** `theme.ts` is the single source of truth: it writes `data-theme` on `<html>` from one
+  effect and nothing else touches that attribute. Initial value: the stored preference, else
+  `prefers-color-scheme`. Tokens are declared once on `:root`, with dark overrides under
+  `[data-theme="dark"]` (CODE_STYLE §11.2/§11.3) — CODE_STYLE is gitignored, so a reader without it takes
+  the token names from `src/mainview/styles.css`.
+- **Folder counts.** Recursive: a folder's count is every note in its subtree, so the root's count equals
+  `getAllNotes().length`. Counts are computed in the renderer from `getAllNotes` — `FolderNode` carries
+  no count field, and adding one would mean another method.
+- **Search.** Case-insensitive substring over `title` + `preview`. Scope: the selected folder's subtree,
+  or every note when `selectedFolder` is `null`. ~150 ms debounce; the query survives a folder switch;
+  clearing it restores the unfiltered list.
+- **Expand/collapse.** Component-local state keyed by folder path, not persisted. Selecting a folder
+  expands its ancestors; the root starts expanded; nothing auto-collapses.
+- **Drag & drop.** Native HTML5 DnD: note rows draggable, folder rows drop targets, and the tree root /
+  "All Notes" row meaning "move to the notebook root". Dropping a note on the folder it already lives in
+  is a no-op. On success the list is re-keyed from `moveNote`'s `newId` and the row stays selected; on
+  failure the row returns to its original folder and the reason is surfaced (Phase 8's toast).
+- **`+` button.** `createNote({ folder: selectedFolder ?? "", title: "Untitled" })`, then select and
+  scroll to the returned `note.id`. Collision naming is the notes layer's business (§9.1), so the
+  renderer never guesses an id.
+- **Toolbar and status bar in Phase 4 are placeholders.** The toolbar renders its action buttons
+  disabled with a tooltip; the status bar renders `—` per field. Phase 4's acceptance is the shell and
+  the sidebar; those two components get their behaviour in Phases 5–7.
 
 ---
 
@@ -474,19 +621,30 @@ form above is the documented approach and works because it is type-only.[5]
 
 ## 12. RPC method reference
 
-See §7 for the typed schema. Semantics:
+See §7 for the typed schema. Reads return data (`null` for an absent note); **every mutation returns
+`{ ok: boolean; error?: string }` plus its payload**, and expected failures are returned rather than
+thrown (§9.1 lists the error strings). The result names below are §7's — `src/shared/types.ts`
+exports the same names, so the table, the schema and the code agree by name, not just shape.
 
 | Method | Params | Result |
 |---|---|---|
-| `getAllNotes` | `{}` | `NoteMeta[]` (no body) |
-| `getFolders` | `{}` | root `FolderNode` tree |
+| `getAllNotes` | `{}` | `NoteMeta[]`, no bodies, `updatedAt` desc (§9.1) |
+| `getFolders` | `{}` | root `FolderNode` tree (`path: ""`, `name: "Notebook"`) |
 | `openNote` | `{ id }` | `NoteMeta` incl. `content`, or `null` |
-| `saveNote` | `{ id, content }` | `{ ok, updatedAt }` |
-| `createNote` | `{ folder, title }` | new `NoteMeta` |
-| `deleteNote` | `{ id }` | `{ ok }` |
-| `createFolder` | `{ parent, name }` | `{ ok, path }` |
-| `deleteFolder` | `{ path }` | `{ ok, error? }` — fails if non-empty |
-| `moveNote` | `{ id, targetFolder }` | `{ ok, newId }` |
+| `saveNote` | `{ id, content }` | `SaveNoteResult` — `{ ok, updatedAt, error? }` |
+| `createNote` | `{ folder, title }` | `CreateNoteResult` — `{ ok, note?, error? }`, `note` is the new `NoteMeta` |
+| `deleteNote` | `{ id }` | `MutationResult` — `{ ok, error? }` |
+| `createFolder` | `{ parent, name }` | `CreateFolderResult` — `{ ok, path, error? }` |
+| `deleteFolder` | `{ path }` | `MutationResult` — `{ ok, error? }`, `folder not empty` when it has contents |
+| `moveNote` | `{ id, targetFolder }` | `MoveNoteResult` — `{ ok, newId, error? }`, `newId` is the id after the move |
+| `renameFolder` | `{ path, name }` | `RenameFolderResult` — `{ ok, path, changedIds, error? }` |
+
+`renameFolder` is the Phase 4 addition, and the reason Phase 3 is "ten methods", not nine. `os.rename`
+semantics: the directory and its contents move together, and because ids *are* paths, **every descendant
+note's id changes** — hence `changedIds: { from, to }[]`, the folder-level counterpart of `moveNote`'s
+`newId`. The renderer re-keys the note list and the selection from that map. It is `[]` only when no note
+sits below the renamed folder. Renaming onto an existing sibling fails with `already exists`; a
+case-only rename is legal on a case-insensitive filesystem (APFS), not a collision.
 
 ---
 
@@ -602,7 +760,9 @@ Checked against `node_modules/electrobun@1.18.1` and a real `bun start` run — 
     typed from `Schema[Side]`. A mis-send is caught (the send proxy is typed from the other half), but a
     handler for a message nobody sends is silently dead.[5]
 22. **The view has built-in requests bun can call.** `Electroview.defineRPC` merges extra handlers, among
-    them `evaluateJavascriptWithResponse: { params: { script: string }; response: any }`, which runs the
+    them `evaluateJavascriptWithResponse: { params: { script: string }; response: any }` — the package's
+    own `any`. The app declares the same params with `response: unknown` (§7's schema) and narrows at the
+    single call site (`src/bun/domProbe.ts`), so a script's value is never trusted by accident. It runs the
     script in the view and returns its value. Bun reaches it via `win.webview.rpc.request.
     evaluateJavascriptWithResponse({ script })` — only if the schema declares it, since the built-in is not
     merged into the bun-side types. Plain `executeJavascript(js)` stays fire-and-forget.[6][11]

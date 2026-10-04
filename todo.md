@@ -27,6 +27,10 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
   `dist/` and copied into `views/mainview/`. **No** `bun.ts` / `bun.html` at the root.
 - RPC is two-sided and object-parametered; handlers are **async**; `id` **is** the notebook-relative
   path. Storage is `.md` files under `Utils.paths.userData/notebook/` — never JSON, never in `views/`.
+- **Ten** methods (SPEC §12): the earlier drafts stopped at nine, and the tenth is `renameFolder`,
+  which the §10.2 folder context menu has always needed. Mutations return the
+  `{ ok, …payload, error? }` envelope and never throw for an expected failure (SPEC §9.1). Ids change
+  on move/rename, so the renderer re-keys from `newId` / `changedIds` instead of reusing the old id.
 - Editing is **toolbar-only** (no markdown keybinds); OS edit accelerators come from `ApplicationMenu`.
 - House style: controllers + `use<X>Controller()`, Zustand for shared state, plain CSS + `cx()`,
   `@/*` → `src/mainview/`. No Tailwind, no TanStack Query, no `cn()`.
@@ -134,49 +138,80 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 - Freshness checked per the standing rule on every run: the launcher was alive, `Resources/app/bun/
   index.js` was newer than `src/bun/index.ts`, and each edit was greppable in the built bundle.
 
-## Phase 3 — Notes store on disk (all nine SPEC §7 methods)
+## Phase 3 — Notes store on disk (all ten SPEC §7 methods)
 
-*Deps: 2. The bulk backend phase; async I/O only.*
+*Deps: 2. The bulk backend phase; async I/O only. The semantics are **decided**, not open — implement
+SPEC §9.1 as written, including the file split from §3.*
 
-- [ ] `src/bun/notes/` filesystem layer, one concern per file: id ↔ path mapping, tree walk
-      (skipping dotfiles), read, write, create, delete, folder create/delete, move.
-- [ ] Handlers: `getAllNotes` (meta + ~60-char preview, no bodies), `getFolders` (recursive
-      `FolderNode`), `openNote` (body on demand, `null` when absent), `saveNote`, `createNote`,
-      `deleteNote`, `createFolder`, `deleteFolder` (fails when non-empty), `moveNote` (returns `newId`).
-- [ ] All handlers `async` with `node:fs/promises` — no sync I/O (SPEC §9, §15.6).
-- [ ] Path safety: reject/normalise ids that escape `NOTEBOOK_DIR`.
+- [ ] `src/bun/notes/` filesystem layer, one concern per file (SPEC §3): `paths.ts` (id ↔ path mapping
+      + containment checks), `tree.ts` (walk → `FolderNode` + note metas), `read.ts` (open a note and
+      derive its meta — title, preview, mtime), `write.ts` (create/save/delete/move + folder
+      create/delete/rename), with `index.ts` as the barrel `src/bun/index.ts` imports.
+- [ ] Handlers for all ten methods: `getAllNotes` (meta + 60-char preview, no bodies, `updatedAt`
+      desc), `getFolders` (recursive `FolderNode`, root `{ path: "", name: "Notebook" }`), `openNote`
+      (body on demand, `null` when absent), `saveNote`, `createNote` (slugged filename, collision
+      suffix, returns the new `note`), `deleteNote`, `createFolder`, `deleteFolder` (fails with
+      `folder not empty`), `moveNote` (returns `newId`), `renameFolder` (returns `changedIds` — the
+      Phase 4 context menu needs it).
+- [ ] Every mutation returns the §7 envelope with the §9.1 error strings (`not found`, `invalid id`,
+      `invalid name`, `already exists`, `folder not empty`) — never a thrown exception for an expected
+      failure.
+- [ ] All handlers `async` with `node:fs/promises` — no sync I/O (SPEC §9, §15.6). Writes are
+      temp-file-then-`rename` (SPEC §9.1).
+- [ ] Path safety: ids, names and paths that escape `NOTEBOOK_DIR` are **rejected, not normalised**
+      (SPEC §9.1).
+- [ ] `bun test` wired up (§4.3, §9.2), with `paths.test.ts` + `tree.test.ts` beside their subjects.
 
 **Verification**
 - Creating a note through the bridge produces a real `.md` file at the expected path; `getAllNotes`
-  then lists it with the right `folder`, `updatedAt` and `preview`.
-- `getFolders` on a hand-made nested tree (2+ levels, one dotfile present) returns the nested
-  `FolderNode` tree **without** the dotfile.
+  then lists it with the right `folder`, `updatedAt`, `title` and `preview`.
+- Title follows SPEC §9.1 (an H1 beats the filename) and the list comes back `updatedAt` desc.
+- `getFolders` on a hand-made nested tree (2+ levels, a dotfile **and** a dot-directory, plus one
+  non-`.md` file) returns the nested tree without any of the three, with the non-`.md` file's
+  directory still walked.
 - `saveNote` rewrites the file; `deleteNote` removes it; `deleteFolder` on a non-empty folder returns
-  `{ok: false, error}` and leaves the folder on disk.
+  `{ok: false, error: "folder not empty"}` and leaves the folder on disk.
 - `moveNote` relocates the file, returns `newId`, and a subsequent `openNote(oldId)` returns `null`.
-- Unit tests on the pure id/path + tree-walk helpers pass (CODE_STYLE §14: these are the highest-value
-  tests in the app).
+- `renameFolder` over a folder holding notes returns `changedIds` covering every descendant, and each
+  `to` id opens the right file.
+- A traversal attempt (`..` inside an id, or an absolute path) returns
+  `{ ok: false, error: "invalid id" }` and touches nothing outside the notebook.
+- `bun run test` passes (SPEC §9.2; CODE_STYLE §14 — the highest-value tests in the app).
 
 ## Phase 4 — App shell + sidebar (tree, notes list, selection, search, folder ops)
 
-*Deps: 3.*
+*Deps: 3. Component names and UI semantics are decided in SPEC §10.5.*
 
 - [ ] Layout: sidebar (~280 px) + editor pane (~1200 px target) + status bar.
-- [ ] CSS tokens on `:root` + `data-theme` dark overrides (CODE_STYLE §11.2/§11.3).
-- [ ] `store/selectedFolder.ts` (Zustand) — selected folder path, `null` = "All Notes".
-- [ ] Components: `FolderTree` (recursive, expand/collapse, note counts), `NotesPanel` (title, modified
-      date, 60-char preview, active row highlighted), `Toolbar` placeholder, `StatusBar` placeholder.
-- [ ] `+` button creating a note in the selected folder (root when none selected).
-- [ ] Search box filtering the notes list by title + preview; global when no folder is selected.
-- [ ] Folder context menu: New Subfolder, Rename Folder, Delete Folder (only when empty).
-- [ ] Drag a note onto a folder → `moveNote`; re-key the list from the returned `newId`.
+- [ ] CSS tokens on `:root` + `[data-theme="dark"]` overrides (CODE_STYLE §11.2/§11.3).
+- [ ] Stores (Zustand, one file each, reached only through controllers): `store/selectedFolder.ts`
+      (`string | null`, `null` = "All Notes"), `store/selectedNote.ts` (`string | null` — the active
+      row, and what Phase 5 opens), `store/theme.ts` (`"light" | "dark"`, the single writer of
+      `<html data-theme>`, initial value from the stored preference else `prefers-color-scheme`).
+- [ ] Components (§10.5): `FolderTree` (recursive, expand/collapse with ancestors auto-expanded,
+      recursive note counts), `NotesPanel` (title, modified date, 60-char preview, active row
+      highlighted), `Toolbar` and `StatusBar` placeholders.
+- [ ] `+` button → `createNote({ folder: selectedFolder ?? "", title: "Untitled" })`, then select the
+      returned `note.id`.
+- [ ] Search box filtering the notes list by title + preview — case-insensitive substring, ~150 ms
+      debounce, scoped to the selected folder's subtree or global when none is selected, the query
+      surviving a folder switch (SPEC §10.4, §10.5).
+- [ ] Folder context menu: New Subfolder, Rename Folder (`renameFolder`, then re-key the list from
+      `changedIds`), Delete Folder (only when empty).
+- [ ] Drag a note onto a folder → `moveNote`; re-key the list and the selection from the returned
+      `newId`; a drop on the note's current folder is a no-op; a failure reverts the row.
 
 **Verification**
 - The sidebar renders the real notebook tree; expanding/collapsing nests correctly.
 - Selecting a folder filters the list to that folder; selecting "All Notes" shows everything.
-- Typing in search filters across every folder; clearing it restores the full list.
+- Typing in search filters the list by title **and** preview without a manual refresh; clearing it
+  restores the full list.
+- Search is case-insensitive and scoped: with a folder selected it ignores notes outside that subtree;
+  on "All Notes" it finds a note nested two levels down.
 - Creating a folder + note through the context menu/`+` appears in the list without a manual refresh.
 - Dragging a note to another folder moves it on disk and the row stays selected under its new id.
+- Renaming a folder that holds notes leaves every note openable — the list re-keys from `changedIds`
+  and the selected note stays selected under its new id.
 - Toggling the theme flips `data-theme` on `<html>` and the whole shell follows (no per-component JS
   theme checks).
 
@@ -240,13 +275,15 @@ verified, not assumed.*
 *Deps: 1–7. Last-mile; the v1 roadmap never reached here.*
 
 - [ ] Empty states (no notes, no folder selected, empty folder) and a shared load-or-render primitive.
-- [ ] RPC rejections surface as a visible toast — nothing swallowed silently.
+- [ ] A failed mutation (`{ ok: false, error }`, SPEC §9.1) and every RPC rejection surface as a
+      visible toast — nothing swallowed silently.
 - [ ] Keyboard/UX pass: tab order, focus rings, accessible controls (real `<button>`/`<a>`, `alt` text).
 - [ ] Audit against the SPEC §15 gotcha list, item by item (async handlers, no `views/` writes, pinned
       version, `Utils.paths.userData` for data, Edit accelerators present).
 - [ ] Grep guardrails: no `electrobun/bun` or `node:*` import under `src/mainview/`; no sync `fs` in
       `src/bun/`; no RPC client reference outside `rpc.ts` + `services/`.
-- [ ] `bunx tsc --noEmit` + lint clean; storybook/tests only where CODE_STYLE §14 requires them.
+- [ ] `bun run type-check` + `bun run test` clean (a bare `tsc --noEmit` cannot pass here — SPEC
+      §15.15); storybook only where CODE_STYLE §14 requires it.
 - [ ] `bun run build:canary` → `electrobun run` on the built app; decide `bundleCEF` per OS.
 
 **Verification**
