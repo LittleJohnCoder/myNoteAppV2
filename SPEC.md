@@ -499,9 +499,12 @@ export to HTML/PDF.
    `electrobun/bun`.[5][6][11]
 6. **Handlers are async — keep them async.** Blocking sync I/O freezes the
    window.[5]
-7. **`views://` in production, dev server in dev.** The React template picks the
-   Vite dev URL when `Updater.localInfo.channel() === "dev"` and falls back to
-   `views://mainview/index.html`, otherwise.[15]
+7. **`views://` in production, dev server in dev — decided by probing, not by a flag.**
+   The template's `getMainViewUrl()` awaits `Updater.localInfo.channel()`; when it is
+   `"dev"` it sends a `HEAD` request to `http://localhost:5173` and uses that URL only if
+   the request succeeds, otherwise falling back to `views://mainview/index.html`.[15] The
+   probe is the point: a channel-only check would blank the window whenever Vite is not
+   running, breaking plain `bun start`. Both branches verified (§4.3 scripts).
 8. **Clipboard/undo/edit accelerators come from the ApplicationMenu**, not from
    the webview. Wire the Edit roles even though formatting is toolbar-only.[4]
 9. **Paths.** Writable data → `Utils.paths.userData`[8]; read-only bundles →
@@ -509,9 +512,14 @@ export to HTML/PDF.
 10. **Packaging.** `electrobun build --env=canary|stable`; per-OS `bundleCEF`
     controls whether CEF ships with the app.[3][12][13] v1 also exposes
     build-only fields such as `useAsar`, `asarUnpack` and `bunVersion`.[3]
-11. **Watch mode can fight your bundler.** `electrobun dev --watch` watches view
-    sources; with Vite, set `watchIgnore: ["dist/**"]` and use `dev:hmr` for
-    HMR.[13]
+11. **Watch mode's coverage is narrower than "watches view sources" suggests — measured.**
+    `electrobun dev --watch` prints the roots it watches at startup: on this config exactly
+    two, `dist/` and `src/bun/` — `src/mainview/` is **not** watched. Editing
+    `src/bun/index.ts` prints `FILE CHANGED: … / Rebuilding…` and restarts the app; editing a
+    renderer source does nothing. With `watchIgnore: ["dist/**"]` a Vite rebuild is ignored
+    as well, so watch mode is a main-process tool here: use `dev:hmr` (Vite dev server + HMR,
+    §15.7) for renderer work. Remove `dist/**` from `watchIgnore` only if you want
+    `vite build --watch` output to drive app rebuilds.[13]
 12. **Pin the version.** `latest` on npm is 2.x; the templates' `file:../../package`
     is a monorepo artifact. Use `"electrobun": "1.18.1"`.[14]
 13. **No `bun.ts` / `bun.html`.** They never existed. Main is

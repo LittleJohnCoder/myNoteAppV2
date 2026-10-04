@@ -67,6 +67,17 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
   restored it exactly (`git diff` clean for `App.tsx`).
 - `bun run type-check`: `type-check OK — 0 project errors (6 known electrobun-internal error(s)
   quarantined)`.
+- Both view-URL branches reproduced (SPEC §15.7): with no dev server, the app logs
+  `view: no Vite dev server — using the built bundle` and dom-ready for `views://mainview/index.html`;
+  with `bun run hmr` up, it logs `view: Vite dev server at http://localhost:5173 (HMR)` and dom-ready
+  for that URL. Without the probe, `dev:hmr`/`hmr` were inert — the window silently kept loading the
+  built bundle.
+- Script sweep: `bun install`, `build:renderer`, `start`, `dev`, `hmr`/`dev:hmr` and `type-check` all
+  exercised. **Not** exercised: `build:canary` / `build:stable` — those are packaging (and need signing
+  identities), so they belong to Phase 8's verification, not this one.
+- Watch coverage measured (SPEC §15.11): `dev --watch` reports watching `dist/` + `src/bun/` only;
+  editing `src/bun/index.ts` triggers `FILE CHANGED … Rebuilding`, editing a renderer source does nothing,
+  and touching `dist/index.html` is suppressed by `watchIgnore: ["dist/**"]`.
 
 ## Phase 2 — Two-sided RPC bridge, window wiring, main-process skeleton
 
