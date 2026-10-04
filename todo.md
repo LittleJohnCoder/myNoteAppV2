@@ -161,6 +161,12 @@ dot-skip, the error strings), and a rewrite silently re-decides them.*
       suffix, returns the new `note`), `deleteNote`, `createFolder`, `deleteFolder` (fails with
       `folder not empty`), `moveNote` (returns `newId`), `renameFolder` (returns `changedIds` — the
       Phase 4 context menu needs it).
+- [ ] Define all ten as **one named object** (`notesHandlers`) passed to
+      `BrowserView.defineRPC({ handlers: { requests: notesHandlers } })`, **not** an inline literal. The
+      object handed *in* is the only handle on the handlers — what `defineRPC` returns exposes
+      `setTransport`/`request`/`send`/… but no read-back of the handler map (measured) — and it is what
+      lets the smoke drive the wiring without a round trip. Type it from the schema so a missing, extra or
+      misnamed method is a compile error. Refines SPEC §5's sample; the handler bodies are unchanged.
 - [ ] Every mutation returns the §7 envelope with the §9.1 error strings (`not found`, `invalid id`,
       `invalid name`, `already exists`, `folder not empty`) — never a thrown exception for an expected
       failure.
@@ -171,7 +177,8 @@ dot-skip, the error strings), and a rewrite silently re-decides them.*
 - [ ] `bun test` wired up — add the `test` script to `package.json` (§4.3, §9.2), with `paths.test.ts`,
       `meta.test.ts`, `tree.test.ts` and `write.test.ts` beside their subjects.
 - [ ] Dev-only boot smoke in `src/bun/index.ts` (`channel === "dev"` only): run the **numbered checks under
-      Verification** against the real `NOTEBOOK_DIR`, in order, printing exactly one
+      Verification** against the real `NOTEBOOK_DIR`, in order (1–13 call the notes-layer barrel; 14–17
+      call the `notesHandlers` object the window dispatches through), printing exactly one
       `[smoke] N ok — <what was observed>` or `[smoke] N FAIL — expected <x>, saw <y>` line per check, and
       removing everything it created in a `finally` so a failed check leaves no litter. Temporary — it goes
       once Phase 4 exercises the methods for real (see the closing line under Verification).
@@ -180,8 +187,10 @@ dot-skip, the error strings), and a rewrite silently re-decides them.*
 
 The smoke prints exactly one line per numbered check, in the fixed form `[smoke] N ok — <what was
 observed>` or `[smoke] N FAIL — expected <x>, saw <y>`, and runs them in this order (later checks build on
-earlier ones). A single `FAIL` means the phase is not done. These checks are the acceptance criteria — the
-prose list they replace was not reproducible.
+earlier ones). Checks 1–13 exercise the notes-layer functions; 14–17 exercise the handler map in
+`src/bun/index.ts` — the phase's own new code, and the one thing a layer-only smoke cannot reach. A single
+`FAIL` means the phase is not done. These checks are the acceptance criteria — the prose list they replace
+was not reproducible.
 
 1. `createNote(NOTEBOOK_DIR, "", "My Note")` → `{ ok: true }`, the returned `note.id` is `mynote.md`, that
    file exists and is 0 bytes, `note.title` is `mynote`, `note.preview` is `""`.
@@ -218,13 +227,39 @@ prose list they replace was not reproducible.
 13. Path safety: `../x.md` and `/etc/passwd` as an id, `Ideas/../../x.md` as a folder path, and a name
     containing `/` each return `{ ok: false, error: "invalid id" }` or `"invalid name"` as §9.1 says, and
     nothing outside `NOTEBOOK_DIR` appears afterwards. `deleteFolder(NOTEBOOK_DIR, "")` → `invalid name`.
-14. `bun run test` passes (SPEC §9.2; CODE_STYLE §14 — the highest-value tests in the app).
+14. **Handler coverage.** `Object.keys(notesHandlers)` is exactly the ten SPEC §7 request names — none
+    missing, none extra — and every value satisfies `fn.constructor.name === "AsyncFunction"`. The ten
+    handlers are the phase's deliverable; nothing above this line touches them.
+15. **Every handler is driven once** through `notesHandlers` against the real `NOTEBOOK_DIR` and answers its
+    SPEC §7 shape: `createNote({ folder: "", title: "Handler Probe" })` → `{ ok: true, note.id:
+    "handlerprobe.md" }`; `openNote({ id })` → a `NoteMeta` carrying `content`; `saveNote({ id, content })` →
+    `{ ok: true, updatedAt }`; `getAllNotes({})` → that note present, with **no** `content` field;
+    `createFolder({ parent: "", name: "HandlerFolder" })` → `{ ok: true, path: "HandlerFolder" }`;
+    `moveNote({ id, targetFolder: "HandlerFolder" })` → `{ ok: true, newId:
+    "HandlerFolder/handlerprobe.md" }`; `renameFolder({ path: "HandlerFolder", name: "HandlerFolderRenamed" })`
+    → `{ ok: true, changedIds: [{ from: "HandlerFolder/handlerprobe.md", to:
+    "HandlerFolderRenamed/handlerprobe.md" }] }`; `getFolders({})` → the root node; `deleteNote({ id })` →
+    `{ ok: true }`; `deleteFolder({ path: "HandlerFolderRenamed" })` → `{ ok: true }`. This is the wiring
+    test: a param destructured under the wrong name (e.g. `{ path }` in `openNote`), or a handler bound to
+    the wrong layer function, fails here and nowhere else.
+16. **`deleteFolder` refuses a folder whose only contents are not notes** (SPEC §9.1 — *any* directory entry
+    counts). Create `HandlerFolder2`, drop a lone `.DS_Store` inside it, call the `deleteFolder` handler →
+    `{ ok: false, error: "folder not empty" }` with the directory still on disk; remove the `.DS_Store` and
+    call again → `{ ok: true }`. Check 9 proves only the `.md` case, so this is the ruling's actual test.
+17. **A case-only folder rename is legal, not a collision** (SPEC §12). Make `CaseDir/n.md`, then
+    `renameFolder({ path: "CaseDir", name: "casedir" })` → `{ ok: true, changedIds: [{ from: "CaseDir/n.md",
+    to: "casedir/n.md" }] }`, and `openNote({ id: "casedir/n.md" })` still returns the body. Do **not** assert
+    the old id fails: on APFS the old spelling still resolves — which is exactly why a case-only rename must
+    not be pre-checked and rejected as `already exists`.
+18. `bun run test` passes (SPEC §9.2; CODE_STYLE §14 — the highest-value tests in the app).
 
-The smoke is the only Phase 3 channel that reaches the ten methods end to end: `bun test` drives the pure
-layer against a `mkdtemp` fixture, while the smoke drives the layer **functions** against the real
-`NOTEBOOK_DIR` — functions and not handlers, because the RPC object exposes no handler map (SPEC §15).
-Phase 2 already proved the bridge itself; nothing here needs to cross the wire, and Phase 4 is where the UI
-exercises the methods for real.
+The smoke is the only Phase 3 channel that reaches the ten methods: `bun test` drives the pure layer against
+a `mkdtemp` fixture, while the smoke drives the barrel **functions** (checks 1–13, every §9.1 ruling) and the
+handler **map** (checks 14–17, the wiring the phase actually writes) against the real `NOTEBOOK_DIR`. Both
+halves are needed, and the handler half is only possible because `notesHandlers` is the object literal handed
+to `defineRPC` — what `createRPC` returns exposes `setTransport`/`request`/`send`/… but no read-back of the
+handler map (measured), so the *input* object is the only handle. Phase 2 already proved the bridge itself;
+nothing here needs to cross the wire, and Phase 4 is where the UI exercises the methods for real.
 
 ## Phase 4 — App shell + sidebar (tree, notes list, selection, search, folder ops)
 

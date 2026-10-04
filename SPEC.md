@@ -236,23 +236,36 @@ import { listAllNotes, readFolderTree, readNote, writeNote, createNote,
 export const NOTEBOOK_DIR = join(Utils.paths.userData, "notebook");
 await mkdir(NOTEBOOK_DIR, { recursive: true });
 
+// The ten handlers are one **named object**, not an inline literal. It is the only handle on them —
+// what `defineRPC` returns exposes `setTransport`/`request`/`send`/… but no read-back of the handler
+// map — so the smoke (todo.md Phase 3) calls this object directly, with no round trip. Typed from the
+// schema, so a missing, extra or misnamed method is a compile error.
+type NotesRequests = NotesRPC["bun"]["requests"];
+type NotesHandlers = {
+  [M in keyof NotesRequests]: (
+    params: NotesRequests[M]["params"],
+  ) => Promise<NotesRequests[M]["response"]>;
+};
+
+const notesHandlers: NotesHandlers = {
+  // Handlers stay one-liners: the notes layer returns the §7 envelopes itself (§9.1), so there
+  // is no error plumbing to duplicate here.
+  getAllNotes:   async () => listAllNotes(NOTEBOOK_DIR),
+  getFolders:    async () => readFolderTree(NOTEBOOK_DIR),
+  openNote:      async ({ id }) => readNote(NOTEBOOK_DIR, id),
+  saveNote:      async ({ id, content }) => writeNote(NOTEBOOK_DIR, id, content),
+  createNote:    async ({ folder, title }) => createNote(NOTEBOOK_DIR, folder, title),
+  deleteNote:    async ({ id }) => deleteNote(NOTEBOOK_DIR, id),
+  createFolder:  async ({ parent, name }) => createFolder(NOTEBOOK_DIR, parent, name),
+  deleteFolder:  async ({ path }) => deleteFolder(NOTEBOOK_DIR, path),
+  moveNote:      async ({ id, targetFolder }) => moveNote(NOTEBOOK_DIR, id, targetFolder),
+  renameFolder:  async ({ path, name }) => renameFolder(NOTEBOOK_DIR, path, name),
+};
+
 const notesRPC = BrowserView.defineRPC<NotesRPC>({
   maxRequestTime: 10_000,
   handlers: {
-    // Handlers stay one-liners: the notes layer returns the §7 envelopes itself (§9.1), so there
-    // is no error plumbing to duplicate here.
-    requests: {
-      getAllNotes:   async () => listAllNotes(NOTEBOOK_DIR),
-      getFolders:    async () => readFolderTree(NOTEBOOK_DIR),
-      openNote:      async ({ id }) => readNote(NOTEBOOK_DIR, id),
-      saveNote:      async ({ id, content }) => writeNote(NOTEBOOK_DIR, id, content),
-      createNote:    async ({ folder, title }) => createNote(NOTEBOOK_DIR, folder, title),
-      deleteNote:    async ({ id }) => deleteNote(NOTEBOOK_DIR, id),
-      createFolder:  async ({ parent, name }) => createFolder(NOTEBOOK_DIR, parent, name),
-      deleteFolder:  async ({ path }) => deleteFolder(NOTEBOOK_DIR, path),
-      moveNote:      async ({ id, targetFolder }) => moveNote(NOTEBOOK_DIR, id, targetFolder),
-      renameFolder:  async ({ path, name }) => renameFolder(NOTEBOOK_DIR, path, name),
-    },
+    requests: notesHandlers,
     messages: {
       // The view's readiness handshake (§7). Every bun → view push is sent from this handler and
       // never straight after the window is created, because sends are not queued. The live half is
