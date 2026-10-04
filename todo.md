@@ -31,9 +31,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
   which the §10.2 folder context menu has always needed. Mutations return the
   `{ ok, …payload, error? }` envelope and never throw for an expected failure (SPEC §9.1). Ids change
   on move/rename, so the renderer re-keys from `newId` / `changedIds` instead of reusing the old id.
-- Editing is **toolbar-only** (no markdown keybinds); OS edit accelerators come from `ApplicationMenu`.
+- Editing is **toolbar-only** (no markdown keybinds) — enforced by the editor package's
+  `enableKeymap: false`, which is on by default (SPEC §2, §10.1); OS edit accelerators come from
+  `ApplicationMenu`.
 - House style: controllers + `use<X>Controller()`, Zustand for shared state, plain CSS + `cx()`,
   `@/*` → `src/mainview/`. No Tailwind, no TanStack Query, no `cn()`.
+- Versions are part of the contract (SPEC §2): `react`/`react-dom` `^18.3.1`, `zustand` `^5.0.15`,
+  `vite` `^6.0.1`, `typescript` `^5.6.3`. Pin before building — "latest" is how a phase ends up on an API
+  nobody wrote against.
+- The dev-only DOM hooks every automated check reads are pinned in **SPEC §10.6**; adding a check that needs
+  a new one means adding the hook there first, not inventing a selector in the probe.
 - `CODE_STYLE.md` is **gitignored by design** — a fresh clone will not have it, and SPEC §13 still
   cites it. It is authoritative on the authoring machine only.
 
@@ -288,75 +295,164 @@ nothing here needs to cross the wire, and Phase 4 is where the UI exercises the 
 
 ## Phase 4 — App shell + sidebar (tree, notes list, selection, search, folder ops)
 
-*Deps: 3. Component names and UI semantics are decided in SPEC §10.5.*
+*Deps: 3, plus `zustand` `^5.0.15` — the only dependency this phase adds (SPEC §2). Component names and UI
+semantics are decided in SPEC §10.5; the dev-only DOM hooks every check below reads are pinned in **SPEC
+§10.6**.*
 
-- [ ] Layout: sidebar (~280 px) + editor pane (~1200 px target) + status bar.
-- [ ] CSS tokens on `:root` + `[data-theme="dark"]` overrides (CODE_STYLE §11.2/§11.3).
-- [ ] Stores (Zustand, one file each, reached only through controllers): `store/selectedFolder.ts`
+*Files:* `src/mainview/` — `App.tsx` + `App.controller.ts`, `main.tsx`, `rpc.ts`, `index.html`, `styles.css`,
+`store/{selectedFolder,selectedNote,draftNote,theme}.ts`, `hooks/useDebouncedValue.ts`,
+`services/notes.service.ts`, `utils/{cx,errorMessage,folderTree,noteDrag,noteFilter,rekey,truncateSnippet}.ts`
+(the pure ones each with a co-located `.test.ts`), and `components/{Sidebar,FolderTree,NotesPanel,SearchBox,
+Toolbar,StatusBar,Loading,EditorPane,FolderNameInput,FolderContextMenu}/`.
+
+- [x] Layout: sidebar (~280 px) + editor pane (~1200 px target) + status bar.
+- [x] CSS tokens on `:root` + `[data-theme="dark"]` overrides (CODE_STYLE §11.2/§11.3).
+- [x] Stores (Zustand, one file each, reached only through controllers): `store/selectedFolder.ts`
       (`string | null`, `null` = "All Notes"), `store/selectedNote.ts` (`string | null` — the active
       row, and what Phase 5 opens), `store/draftNote.ts` (`{ folder: string } | null` — a new note with
-      no file yet), `store/theme.ts` (`"light" | "dark"`, the single writer of `<html data-theme>`,
-      initial value from the stored preference else `prefers-color-scheme`).
-- [ ] Components (§10.5): `FolderTree` (recursive, expand/collapse with ancestors auto-expanded,
+      no file yet), `store/theme.ts` (`"light" | "dark"`, persisted with Zustand `persist`; the store
+      stays DOM-free so `bun test` can load it, and `App.controller.ts` is the single writer of
+      `<html data-theme>`, initial value from the stored preference else `prefers-color-scheme`).
+- [x] Components (§10.5): `FolderTree` (recursive, expand/collapse with ancestors auto-expanded,
       recursive note counts), `NotesPanel` (title, modified date, 60-char preview, active row
       highlighted), `Toolbar` and `StatusBar` placeholders.
-- [ ] `+` button → starts a draft (`draftNote = { folder: selectedFolder ?? "" }`); it writes **nothing**.
+- [x] `+` button → starts a draft (`draftNote = { folder: selectedFolder ?? "" }`); it writes **nothing**.
       Committing a title creates the note through `createNote` and selects the returned `note.id`;
       skipping the title and typing a body creates it on the first save with `title: ""` (SPEC §10.5).
-- [ ] Search box filtering the notes list by title + preview — case-insensitive substring, ~150 ms
+      The title input itself is Phase 5; Phase 4 stages the draft and exposes it as `data-draft-folder`.
+- [x] Search box filtering the notes list by title + preview — case-insensitive substring, ~150 ms
       debounce, scoped to the selected folder's subtree or global when none is selected, the query
       surviving a folder switch (SPEC §10.4, §10.5).
-- [ ] Folder context menu: New Subfolder, Rename Folder (`renameFolder`, then re-key the list from
+- [x] Folder context menu: New Subfolder, Rename Folder (`renameFolder`, then re-key the list from
       `changedIds`), Delete Folder (only when empty).
-- [ ] Drag a note onto a folder → `moveNote`; re-key the list and the selection from the returned
+- [x] Drag a note onto a folder → `moveNote`; re-key the list and the selection from the returned
       `newId`; a drop on the note's current folder is a no-op; a failure reverts the row.
+- [x] Retire the Phase 2 DOM probe: `src/bun/domProbe.ts` is **deleted**, and `src/bun/phase4Probe.ts` runs
+      after the Phase 3 smoke in `bun start` (§15.22). The `#edit-probe` textarea **stays** — it is the only
+      channel for the ⌘C/⌘V/⌘Z manual check (SPEC §10.6).
+- [x] The tree's flattening helper (`flattenFolderPaths`) is gone; `utils/folderTree.ts` exports
+      `ancestorFolderPaths` + `noteCountsByFolder` instead, which is what the tree and the counts use.
 
-**Verification**
-- The sidebar renders the real notebook tree; expanding/collapsing nests correctly.
-- Selecting a folder filters the list to that folder; selecting "All Notes" shows everything.
-- Typing in search filters the list by title **and** preview without a manual refresh; clearing it
-  restores the full list.
-- Search is case-insensitive and scoped: with a folder selected it ignores notes outside that subtree;
-  on "All Notes" it finds a note nested two levels down.
-- Creating a folder + note through the context menu/`+` appears in the list without a manual refresh.
-- Dragging a note to another folder moves it on disk and the row stays selected under its new id.
-- Renaming a folder that holds notes leaves every note openable — the list re-keys from `changedIds`
-  and the selected note stays selected under its new id.
-- Toggling the theme flips `data-theme` on `<html>` and the whole shell follows (no per-component JS
-  theme checks).
-- `+` opens a draft and writes **no** file: click it, then abort by selecting another note — the notebook
-  on disk is unchanged, with no `untitled.md` litter.
+**Verification** — automated half reproduced 2026-10-04; the manual list is awaiting a human run.
+
+*Channels.* `bun test` drives the pure layer (80 tests / 9 files: the notes layer + `src/mainview/utils/*`,
+each test co-located). The dev probe `src/bun/phase4Probe.ts` is the only Phase 4 channel that reads the
+live DOM: `bun start` runs it after the Phase 3 smoke, it drives the shell through 20 numbered checks,
+and it removes its own `Probe…` fixture in `finally` — the notebook must be empty afterwards. Each line
+below names the check that reproduces it.
+
+1. The sidebar renders the real notebook tree; expanding/collapsing nests correctly. *(1–3)*
+2. Selecting a folder filters the list to that folder; selecting "All Notes" shows everything. *(4–5)*
+3. Typing in search filters the list by title **and** preview without a manual refresh; clearing it
+   restores the full list. *(6–7, 10)*
+4. Search is case-insensitive and scoped: with a folder selected it ignores notes outside that subtree;
+   on "All Notes" it finds a note nested two levels down. *(8–9)*
+5. Creating a **folder** through the context menu appears in the list without a manual refresh. *(13)*
+   The note half of the old line belongs to Phase 5 — no way to create a note exists until the title
+   input does.
+6. Dragging a note to another folder moves it on disk and the row stays selected under its new id.
+   *(16, driven by a synthetic `DragEvent`; 15 is the wiring, 17 the no-op drop on the current folder)*
+7. Renaming a folder that holds notes leaves every note openable — the list re-keys from `changedIds`
+   and the selected note stays selected under its new id. *(14)*
+8. Delete Folder is offered only when the folder is empty, and Escape closes the context menu. *(18)*
+9. Toggling the theme flips `data-theme` on `<html>` and the whole shell follows (no per-component JS
+   theme checks). *(11)*
+10. `+` opens a draft and writes **no** file: click it, then abort by selecting another note — the
+    notebook on disk is unchanged, with no `untitled.md` litter. *(12)*
+11. The theme persists: `localStorage` works under the `views://` origin and holds the store's key *(19)*,
+    and a value written there is the live theme at the next boot *(20 — run the probe twice; the second
+    run writes the first run's value back)*.
+
+*Manual — nothing can drive these from a script.*
+1. The real OS drag gesture (mouse down → move → release) on the running window.
+2. The visual layout at the default window size: sidebar width, the editor pane's max width, status bar.
+3. The inline name input's edges: Escape cancels, blur commits, an empty name is refused.
+4. Theme end to end: click the status-bar toggle, quit, relaunch — the choice is still in effect. (The
+   probe covers the storage half out of band; this covers the click.)
+5. `#edit-probe` in the editor pane: ⌘C / ⌘V / ⌘Z (the ApplicationMenu roles, SPEC §5).
 
 ## Phase 5 — Editor: mount, hybrid render, open/save persistence
 
-*Deps: 4. Deliberate split from Phase 6 — this half is "it renders and it persists".*
+*Deps: 4, plus the editor package pinned (below). Deliberate split from Phase 6 — this half is "it
+renders and it persists".*
 
-- [ ] `editor/extensions.ts`: **one** composition of the CodeMirror extensions
-      (`@codemirror/lang-markdown` + `codemirror-markdown-hybrid`, KaTeX + mermaid options).
+```bash
+bun add codemirror-markdown-hybrid@1.2.2 @codemirror/state@^6 @codemirror/view@^6 \
+  @codemirror/commands@^6 @codemirror/lang-markdown@^6
+```
+
+*Read first:* SPEC §10.1 (this phase's contract, including the dev-only read-back), §10.3 (status bar
+formats), §9.1 (save points, `noteChanged`), §10.5 (`+`, drafts, theme), §15.22 (the probe channel).
+
+*Creates:* `src/mainview/editor/{extensions.ts,createEditor.ts}`,
+`src/mainview/components/EditorPane/{EditorPane.tsx,EditorPane.controller.ts}`,
+`src/mainview/components/TitleInput/{TitleInput.tsx,TitleInput.controller.ts}`, and the dev-only
+`src/bun/phase5Probe.ts`. *Retires:* the `EditorPane` placeholder with its `#edit-probe` textarea (Phase
+2's channel, deliberately kept through Phase 4) and the `data-draft-folder`-only draft surface — replaced
+by `#editor-pane[data-note-id][data-dirty]` + `window.__notesEditor` (§10.1). Grep SPEC §3 for anything
+this phase removes (R9).
+
+- [ ] `editor/extensions.ts`: **one** composition — `hybridMarkdown({ theme, enablePreview: true,
+      enableKeymap: false, enableCollapse: true })` plus `@codemirror/lang-markdown`. `enableKeymap: false`
+      is load-bearing: the package's formatting keybindings are **on by default** and §10.1 is
+      toolbar-only (Phase 7's ⌘B check depends on this line).
 - [ ] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
-      config.
-- [ ] Title input above the body (SPEC §10.1): focused when a draft opens, `Untitled` placeholder, input
-      constrained to letters/digits and lowercased, Enter/Tab/blur commits it, Tab continues into the body.
-- [ ] Committing a draft's title calls `createNote` once, clears `draftNote`, selects the returned
-      `note.id`; typing into the body instead creates the note on the first save with `title: ""`.
-- [ ] Once a note exists its title is read-only — the MVP has no rename (SPEC §14).
-- [ ] Opening a note loads its body into the editor; the focused line is raw, other lines render.
-- [ ] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the
-      client directly).
-- [ ] Guard the async/ids: switching notes mid-save must not write A's text into B.
-- [ ] Status bar: word count, line count, filename + folder path.
+      config. In `dev` the factory also assigns the view to `window.__notesEditor` — the only way any
+      check can read or drive this editor, since its document is not in the DOM (§10.1).
+- [ ] Title input above the body (§10.1, §10.5): focused when a draft opens, `Untitled` placeholder, input
+      constrained to the slug charset and lowercased, Enter/Tab/blur committing **identically**, Tab
+      continuing into the body, `readOnly` (not `disabled`) once the note exists.
+- [ ] Committing a draft's title calls `createNote` **once**, clears `draftNote`, and selects the returned
+      `note.id`; typing into the body instead creates the note on the first save (500 ms debounce or blur,
+      whichever comes first) with `title: ""`. The editor binds to the returned id, never to the typed
+      name — a collision returns `plan1` (§10.5).
+- [ ] Opening a note focuses the body at line 1 and loads its content. The body is loaded **only** on
+      selection change: a `noteChanged` refresh never reloads it, or a save would move the cursor (§9.1).
+- [ ] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the RPC
+      client directly); flush a pending save before switching notes.
+- [ ] Guard the async/ids: capture the note id at save time and drop the result if the selection moved, so
+      a switch mid-save cannot write A's text into B.
+- [ ] Status bar: word count, line count and `filename · folder` from the **live document** (§10.3),
+      returning to `—` when no note is open.
+- [ ] `noteChanged` is pushed by the **bun handlers** after a successful `createNote`/`saveNote` (§9.1);
+      the renderer only refreshes the tree and the list.
 
-**Verification**
-- Open each of three notes in turn; the body matches the file on disk each time.
-- Type, wait >500 ms, read the `.md` file directly → the text is there; blur saves immediately.
-- Quit and relaunch → the last edit is still present.
-- Rapidly switching notes while a debounce is pending does not corrupt either file.
-- Word/line counts and the path in the status bar match the open note.
-- Pressing `+` puts the cursor in the title field; Tab reaches the body without creating anything yet.
-- Type `plan`, press Enter → `plan.md` exists on disk, the list shows `plan`, and the row is selected.
-- Press `+`, Tab straight into the body, type a line → `untitled.md` holds exactly that text with no title
-  line added, and the list shows the body's first H1 if there is one, else `untitled`.
-- The title is not in the body: opening the `.md` directly shows only what was typed into the editor body.
+**Verification** — automated unless marked *(manual)*.
+
+*Channels.* `bun test` for anything pure; `src/bun/phase5Probe.ts` for the live window, chained after the
+Phase 4 probe in `bun start`. It drives the editor through `window.__notesEditor` (the document is not in
+the DOM), seeds its own notes, asserts the bytes on disk, and removes them in `finally` — the notebook
+must be empty afterwards.
+
+1. Opening each of three seeded notes shows that note's body, and the file is unchanged afterwards.
+   *Failure:* the pane shows the previous note, or an empty document.
+2. Typing then waiting >500 ms writes the text to the `.md` on disk. *Failure:* the file lags, or holds
+   another note's text.
+3. Blur saves immediately — type, blur, read the file without waiting out the debounce. *Failure:* the
+   file still holds the pre-edit content.
+4. Quitting inside the debounce loses the last edit and nothing more (§9.1 — accepted): type, wait
+   >500 ms, quit — the probe asserts the bytes on disk before exiting, and a relaunch re-opens it
+   *(the relaunch and the open are manual)*. *Failure:* a truncated or half-written file, or the text
+   missing after a completed wait.
+5. Switching notes while a debounce is pending leaves both files correct, each with its own text.
+   *Failure:* B receives A's text, or the save lands on the wrong id.
+6. Word/line counts and the path match the open note and track edits (type a word → the counts change);
+   with no note open every field is `—`. *Failure:* counts derived from the file rather than the live
+   document, or stale after a switch.
+7. `+` puts the caret in the title field; Tab with an **empty** field reaches the body and creates nothing
+   (`#editor-pane[data-note-id]` absent, notebook unchanged). *Failure:* a file appears anyway.
+8. Type `plan`, press Enter → `plan.md` exists, the list shows `plan`, the row is selected, and the editor
+   is bound to the returned id. *Failure:* no file, or no selected row.
+9. Collision: with `plan.md` already present, committing `plan` yields `plan1.md` and the list shows
+   `plan1` (§10.5). *Failure:* `plan.md` overwritten, or the typed name selected instead of the returned id.
+10. `+`, Tab straight into the body, type a line → `untitled.md` holds exactly that line with **no** title
+    line, and the list shows the body's first H1 if there is one, else `untitled` (§9.1).
+11. Opening the `.md` file directly shows only body text — the title is not written into it.
+12. *(manual)* The body renders hybrid as specified: the focused line raw, every other line rendered
+    (bold/headings visible), fenced code highlighted by the package's own languages. Task-list write-back,
+    collapse and math/mermaid are Phase 6's checks — §2 pins their versions.
+13. *(manual)* The editor opens in the stored theme and follows a status-bar toggle without a stale
+    half-dark surface. Phase 5 owns the initial value, Phase 6 the live sync (§10.1).
 
 ## Phase 6 — Interactive markdown: task write-back, collapse, math, mermaid, theme sync
 
@@ -365,8 +461,11 @@ nothing here needs to cross the wire, and Phase 4 is where the UI exercises the 
 - [ ] Task-list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` **in the
       source**.
 - [ ] Collapsible headings (H1–H3).
-- [ ] `$$…$$` → KaTeX; ```mermaid fences → diagrams; code fences get Prism highlighting.
-- [ ] Theme drives **both** the hybrid plugin and `<html data-theme>` — one source (Zustand selector).
+- [ ] `$$…$$` → KaTeX; ```mermaid fences → diagrams; code fences get the hybrid package's own
+      CodeMirror/Lezer highlighting (the package has no Prism, so nothing is added for that — §2). Math
+      and mermaid are always-on features with no options to pass.
+- [ ] Theme drives **both** the hybrid plugin and `<html data-theme>` — one source (Zustand selector), the
+      live switch being `setTheme(view, theme)` off the store (§10.1). Phase 5 owned the initial value.
 
 **Verification**
 - Clicking a checkbox in the rendering changes the underlying `.md` on disk (and survives reload).
@@ -380,11 +479,15 @@ nothing here needs to cross the wire, and Phase 4 is where the UI exercises the 
 *Deps: 5 (actions need a mounted view). Mechanical but broad — its own phase so each action is
 verified, not assumed.*
 
-- [ ] `EditorToolbar.controller.ts`: one function per action, each dispatching against the live view.
+- [ ] `EditorToolbar.controller.ts`: one function per action, each dispatching against the live view
+      through the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code).
 - [ ] Actions: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list, Task list, Quote,
-      Code, Code block, Link, Image, Table, Divider, Math, Mermaid (SPEC §10.1).
-- [ ] Preview-mode toggle (hybrid / split / raw).
-- [ ] Confirm **no** markdown keybinds were added (toolbar-only is the spec).
+      Code, Code block, Link, Image, Table, Divider, Math, Mermaid (SPEC §10.1). Math has **no** package
+      action — it inserts `$$…$$` by hand (§2).
+- [ ] Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`); the package has no split
+      mode, so the earlier "hybrid / split / raw" wording is withdrawn (§2).
+- [ ] Confirm **no** markdown keybinds were added: the composition already sets `enableKeymap: false`
+      (Phase 5's line, and the reason it exists) — this item is the behavioural proof, not new work.
 
 **Verification**
 - Every action in the list is exercised once and produces the expected markdown in the source.
@@ -400,6 +503,10 @@ verified, not assumed.*
 - [ ] A failed mutation (`{ ok: false, error }`, SPEC §9.1) and every RPC rejection surface as a
       visible toast — nothing swallowed silently.
 - [ ] Keyboard/UX pass: tab order, focus rings, accessible controls (real `<button>`/`<a>`, `alt` text).
+- [ ] First paint: `index.html` hardcodes `data-theme="light"`, so a dark-theme user sees one light frame
+      before the shell applies the stored value (SPEC §10.5, §10.6). Set `color-scheme` on `:root` and read
+      the stored theme before first paint.
+- [ ] Remove the unread `data-theme-value` attribute on `#status-bar` (SPEC §10.6).
 - [ ] Audit against the SPEC §15 gotcha list, item by item (async handlers, no `views/` writes, pinned
       version, `Utils.paths.userData` for data, Edit accelerators present).
 - [ ] Grep guardrails: no `electrobun/bun` or `node:*` import under `src/mainview/`; no sync `fs` in

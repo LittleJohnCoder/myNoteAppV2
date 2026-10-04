@@ -54,10 +54,11 @@ Electrobun; the renderer HTML is served over the custom `views://` protocol, not
 |---|---|
 | Electrobun | v1 — pin `1.18.1` (last stable v1 tag[12]; npm `latest` now points at 2.x, so **never** install unpinned) |
 | Main-process runtime | Bun (v1's default; there is no Cottontail in v1)[3] |
-| Renderer | React 18 + TypeScript, bundled by Vite 6 |
+| Renderer | React 18 + TypeScript (`react`/`react-dom` `^18.3.1`, `typescript` `^5.6.3`), bundled by Vite 6 (`vite` `^6.0.1`) |
+| Renderer state | `zustand` `^5.0.15` — the Zustand 5 API Phase 4 was built against; one store per file (§10.5) |
 | CLI | `electrobun` (`init` / `dev` / `build` / `run`)[2] |
-| Editor | `codemirror-markdown-hybrid` |
-| Math / diagrams | KaTeX, Mermaid (pulled in by the hybrid package) |
+| Editor | `codemirror-markdown-hybrid` — pin `1.2.2`; four CodeMirror peers must be installed with it: `@codemirror/state`, `@codemirror/view`, `@codemirror/commands`, `@codemirror/lang-markdown` (all `^6`, the versions this was measured against) |
+| Math / diagrams | KaTeX and Mermaid arrive **transitively** through the hybrid package (KaTeX `0.16.x`, Mermaid `11.x`): do not add them directly, and do not expect 0.19/12 in Phase 6's checks |
 | v1.18.1 ships | Bun 1.3.0, CEF 125.0.22 (optionally bundled); macOS required to build[18] |
 
 Package pinning note: the repo templates declare `"electrobun": "file:../../package"`
@@ -67,6 +68,25 @@ registry version instead:
 ```jsonc
 // package.json
 "dependencies": { "electrobun": "1.18.1" }
+```
+
+Editor package, measured against `1.2.2` (its README and its `package.json`, not inferred): the entry
+point is `hybridMarkdown(options?)`, and the only options are `theme`, `enablePreview`, `enableKeymap`
+(**default `true`**) and `enableCollapse`. It also exports an `actions` map the toolbar dispatches
+against, plus `toggleHybridMode` / `setMode` and `toggleTheme` / `setTheme(view, theme)`. Two
+consequences are pinned in §10.1: `enableKeymap: false` is what makes "toolbar-only" true, and the
+package has **no** split-preview mode. Phase 5 installs it as:
+
+```bash
+bun add codemirror-markdown-hybrid@1.2.2 @codemirror/state@^6 @codemirror/view@^6 \
+  @codemirror/commands@^6 @codemirror/lang-markdown@^6
+```
+
+Phase 4's single dependency, declared rather than bare-installed, so the range is explicit:
+
+```jsonc
+// package.json
+"dependencies": { "zustand": "^5.0.15" }
 ```
 
 ---
@@ -82,7 +102,8 @@ myNoteAppV2/
 ├── src/
 │   ├── bun/
 │   │   ├── index.ts            # main process (Bun runtime) — RPC handlers + window
-│   │   ├── domProbe.ts         # dev-only "read the live DOM" channel (§15.22)
+│   │   ├── smoke.ts            # dev-only Phase 3 smoke — drives the ten methods through the handler map
+│   │   ├── phase4Probe.ts      # dev-only DOM probe over §15.22 — shell/tree/search/folders/DnD/theme (checks 1–20)
 │   │   └── notes/              # filesystem layer — one concern per file (§9.1)
 │   │       ├── index.ts        # barrel exporting the functions §5 imports
 │   │       ├── paths.ts        # id ↔ path mapping + containment checks
@@ -97,12 +118,14 @@ myNoteAppV2/
 │       ├── main.tsx            # React entry (createRoot)
 │       ├── rpc.ts              # Electroview.defineRPC + exported client
 │       ├── App.tsx
-│       ├── components/         # shell: FolderTree, NotesPanel, Toolbar, StatusBar, TitleInput (§10.1)
-│       ├── hooks/              # controllers: use<X>Controller()
+│       ├── components/         # shell: Sidebar, FolderTree, NotesPanel, SearchBox, Toolbar, StatusBar,
+│       │                       #   Loading, and the editor pane's EditorPane + TitleInput (§10.1, §10.5)
+│       ├── hooks/              # controllers: use<X>Controller() (+ useDebouncedValue)
 │       ├── services/           # thin wrappers over the RPC client (CODE_STYLE §9.2)
 │       ├── store/              # Zustand: selectedFolder, selectedNote, draftNote, theme (§10.5)
-│       ├── utils/              # pure helpers (folder-tree flatten, …)
-│       ├── editor/             # CodeMirror + hybrid plugin wiring
+│       ├── utils/              # pure helpers, each with a co-located `*.test.ts` (cx, truncateSnippet,
+│       │                       #   folderTree, noteFilter, rekey, noteDrag, errorMessage)
+│       ├── editor/             # CodeMirror + hybrid plugin wiring — `extensions.ts` + `createEditor.ts` (Phase 5)
 │       └── styles.css          # plain CSS (no Tailwind)
 └── dist/                       # Vite output — generated; Electrobun copies it into views/
 ```
@@ -535,9 +558,16 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   order, and "the list filters to that folder" is only checkable against a fixed one.
 - **Atomic writes.** Write to a sibling temp file in the same directory, then `rename()` — so quitting
   during the 500 ms save debounce can never leave a half-written note.
+- **Save points.** A pending body save is flushed before anything changes which note the editor is
+  showing: a note switch, and the editor's blur. Quitting inside the 500 ms window loses the last edit —
+  there is no close-time flush in the MVP, which is why the Phase 5 check types, waits >500 ms, then
+  quits. The title half has its own sequence (§10.5's `+`): `createNote` runs **once**, then the body
+  takes over the normal save path with the returned id.
 - **When `noteChanged` fires.** After every successful `saveNote`/`createNote`, with that note's id and
-  `updatedAt`. Nothing sends it today (Phase 2 declared the message; §7 records the trigger; Phase 3's
-  handlers stay one-liners over the notes layer and do not push).
+  `updatedAt` (§7 declares the message; §5 shows the send). Phase 5 makes it real: the **bun handlers**
+  push it after the write, never the renderer. The shell listens and refreshes the tree and the notes
+  list only — it must not reload the open note's body into the editor, or a save would move the cursor
+  (the editor owns its document between selection changes).
 - **One notebook, one tree.** Every note is one `.md` file and every folder is an ordinary nested
   directory — all under `NOTEBOOK_DIR`, and nothing may resolve outside it. There is no second storage
   root, no sidecar index, no JSON. `createFolder` nests through `parent` to arbitrary depth inside that
@@ -619,21 +649,37 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   afterwards is a rename (§14).
 - **The title is not in the body.** Nothing writes an H1 for you; the body contains exactly what the user
   typed into the editor.
-- Focused line renders raw Markdown; all other lines render.
-- Code highlighting via the hybrid package's Prism integration.
+- **Focus.** `+` puts the caret in the title input; opening an existing note puts it in the body, line 1.
+  The focused line renders raw Markdown; all other lines render.
+- Code highlighting is the hybrid package's bundled CodeMirror languages (Lezer): the package has **no**
+  Prism dependency, so "Prism" is not the mechanism and prismjs is not added (§2).
 - Task list items render as clickable checkboxes; toggling writes back to source.
 - Collapsible headings (H1–H3).
-- `$$ … $$` → KaTeX. ` ```mermaid ` fences → Mermaid diagrams.
-- Formatting is **toolbar-only** — no Markdown shortcuts. (OS edit accelerators
+- `$$ … $$` → KaTeX. ` ```mermaid ` fences → Mermaid diagrams. Both are always-on features of the hybrid
+  package — there are no KaTeX/mermaid options to pass (§2).
+- Formatting is **toolbar-only** — no Markdown shortcuts. Enforced by composing the editor with
+  `enableKeymap: false`: the package's formatting keybindings (Ctrl+B/I/K…) are **on by default**, so
+  without that flag this line and Phase 7's ⌘B check are both false. (OS edit accelerators
   still work via the ApplicationMenu roles in §5; that is not a formatting
   shortcut and must stay.)
 - Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list,
-  Task list, Quote, Code, Link, Image, Table, Divider, Math, Mermaid.
-- Preview-mode toggle (rendered / split).
-- Theme: light/dark via the hybrid package's theme option.
+  Task list, Quote, Code, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against
+  the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code). Math has **no**
+  package action: it inserts `$$…$$` by hand (§2).
+- Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`). The package has no
+  split-preview mode, so the earlier "split" wording is withdrawn.
+- Theme: light/dark through the package's `theme` option, with `setTheme(view, theme)` for live switching;
+  §10.5 keeps the store the single source. Phase 5 passes the initial value, Phase 6 owns the live sync.
+- **Dev-only read-back (testability).** `createEditor()` exposes the view on `window.__notesEditor` when
+  the channel is `dev`, and the editor pane renders `#editor-pane[data-note-id][data-dirty]`. A DOM-only
+  probe cannot read this editor — its document lives in `EditorState`, not in the DOM — so these are the
+  handles Phase 5's checks drive and read (§15.22).
 
 ### 10.2 Sidebar (~280 px)
-- Folder tree (top ~140 px): recursive, expand/collapse.
+- Folder tree (top region): recursive, expand/collapse. CSS: `--tree-min-height: 140px` with a
+  `max-height: 45%` of the sidebar — 140 px is a **floor** under a share-cap, so a deep tree is not clipped
+  and the notes list keeps the remaining space. (Earlier drafts said "top ~140 px"; that literal is
+  withdrawn — it would have made the tree a fixed height.)
 - Notes list: title, modified date, 60-char preview; active row highlighted.
 - Filter/search box; `+` to create a note in the selected folder (it starts an unsaved draft, §10.5).
 - Context menu on folders: New Subfolder, Rename Folder, Delete Folder (only
@@ -642,8 +688,14 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 
 ### 10.3 Layout & status bar
 - Sidebar + editor pane (~1200 px target width).
-- Floating toolbar above the editor.
+- The toolbar is the shell's own `Toolbar` component above the editor (Phase 4's, enabled in Phase 7) —
+  not a floating overlay.
 - Status bar: word count, line count, `filename` + folder path.
+- **Counts and path (Phase 5).** Both counts come from the editor's **live document**, not the file:
+  words = whitespace-run-separated tokens, lines = the document's line count, refreshed on every document
+  change. The path renders `filename · folder`, taking the note id's last segment as the filename and the
+  remainder as the folder (`plan · Ideas/2026`), or `plan · Notebook` at the root. With no note open every
+  field returns to `—` (Phase 4's placeholder state).
 
 ### 10.4 Multi-folder
 - Unlimited nesting; drag a note onto a folder to move it (`moveNote`).
@@ -653,20 +705,28 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 
 ### 10.5 Sidebar & shell semantics (Phase 4 decisions)
 
-- **Component names.** `FolderTree`, `NotesPanel` (the earlier drafts also said "NoteList" — one name
-  only), `TitleInput`, `Toolbar`, `StatusBar`. `TitleInput` is the editor pane's name field (§10.1), not
-  a sidebar component; the rest sit in a sidebar shell under `components/`.
+- **Component names.** `Sidebar` (the shell), `FolderTree` + `FolderTreeRow` + `AllNotesRow`,
+  `FolderNameInput` (the inline create/rename input), `FolderContextMenu`, `NotesPanel` + `NoteRow`,
+  `SearchBox`, `Toolbar`, `StatusBar`, `Loading`, and the editor pane's `EditorPane` + `TitleInput`.
+  (The earlier drafts also said "NoteList" — one name only: it is `NotesPanel`.) `TitleInput` is the
+  editor pane's name field (§10.1), not a sidebar component; the rest sit in the sidebar shell under
+  `components/`, each with its controller beside it (`use<X>Controller()`) except the pure rows.
 - **Store.** `store/selectedFolder.ts` (`string | null`, `null` = "All Notes"),
   `store/selectedNote.ts` (`string | null` — the active row, and what Phase 5 opens),
   `store/draftNote.ts` (`{ folder: string } | null` — a new note with no file yet, §10.5's `+`),
   `store/theme.ts` (`"light" | "dark"`). One Zustand file each; components reach them through
   controllers, never directly. `selectedNote` stays a plain id because a draft has no id — hence its own
   store rather than a tagged union in the selection.
-- **Theme.** `theme.ts` is the single source of truth: it writes `data-theme` on `<html>` from one
-  effect and nothing else touches that attribute. Initial value: the stored preference, else
-  `prefers-color-scheme`. Tokens are declared once on `:root`, with dark overrides under
+- **Theme.** `store/theme.ts` holds the value — persisted with Zustand's `persist` under the key
+  `mynoteappv2.theme`, measured working under the `views://` origin — and `App.controller.ts` applies it:
+  one effect writes `data-theme` on `<html>`, and nothing else touches that attribute. The store stays
+  DOM-free so it can be unit-tested under `bun test`; the write lives in the shell's controller. Initial
+  value: the stored preference, else `prefers-color-scheme`, and a stored value wins at boot (measured in
+  Phase 4, probe checks 19–20). Tokens are declared once on `:root`, with dark overrides under
   `[data-theme="dark"]` (CODE_STYLE §11.2/§11.3) — CODE_STYLE is gitignored, so a reader without it takes
-  the token names from `src/mainview/styles.css`.
+  the token names from `src/mainview/styles.css`. **First paint is still fixed:** `index.html` hardcodes
+  `data-theme="light"`, so a dark-theme user sees one light frame before the shell's effect runs. Every probe
+  check reads the attribute *after* mount and is unaffected; Phase 8 owns removing the flash (§10.6).
 - **Folder counts.** Recursive: a folder's count is every note in its subtree, so the root's count equals
   `getAllNotes().length`. Counts are computed in the renderer from `getAllNotes` — `FolderNode` carries
   no count field, and adding one would mean another method.
@@ -686,6 +746,12 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   first body save. Either way the file is written once, already correctly named — there is no rename, and
   walking away from a draft leaves nothing on disk. Collision naming is the notes layer's business (§9.1 —
   `untitled`, `untitled1`, …), so the renderer never guesses an id.
+- **What commits a title, and what abandons a draft.** Enter, Tab and blur commit **identically**: with a
+  non-empty title the file exists before the caret reaches the body; with an empty field a commit is a
+  no-op that only moves focus — that is the "nothing created yet" case in Phase 5's checks, not Tab being
+  special. A draft is abandoned (nothing on disk) only by selecting another note or quitting; a folder
+  switch keeps it, since nothing about a folder moves the caret. The first body save fires on the 500 ms
+  debounce or on blur, whichever comes first, and never runs with empty content.
 - **A colliding title is visible.** Committing `plan` when `plan.md` already exists produces `plan1.md`,
   and the list shows `plan1` — the name the user typed is not the name they get. That is the direct cost of
   "the name is the title" plus the collision rule, and it is why the renderer selects the returned `note`
@@ -695,6 +761,41 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 - **Toolbar and status bar in Phase 4 are placeholders.** The toolbar renders its action buttons
   disabled with a tooltip; the status bar renders `—` per field. Phase 4's acceptance is the shell and
   the sidebar; those two components get their behaviour in Phases 5–7.
+
+### 10.6 Dev-only observation surface (the probe contract)
+
+Every automated check in `todo.md` reads the renderer through the DOM, and this app's editor keeps its
+document outside the DOM — so the hooks below **are** the verification contract, not incidental markup. They
+are additive: no styling or behaviour may depend on them, and a check that needs a new hook adds it here
+first. Everything listed exists in the committed tree except the three marked *(Phase 5)*; a rename of any of
+these strings is a contract change, not a refactor.
+
+**Shell.** `#shell` carries its own state as data attributes, which is why a probe can assert the app's
+selection without reading React state: `data-selected-folder` (`""` = All Notes), `data-selected-note`
+(`""` = none), `data-draft-folder` (`""` = no draft).
+
+**Sidebar.** Folder rows are `button[data-folder-path]` with `data-folder-count`, `data-expanded`, and
+`data-drop-zone="true"` on every drop target; the "All Notes" row is the same contract with
+`data-folder-path=""`. Expand/collapse is `.tree__twisty` inside `.tree__row`. Note rows are `[data-note-id]`,
+and the active one additionally carries `.notes__row_active` — a modifier, not the base class, so a check
+that looks for `.notes__row` matches every row. Ids: `#sidebar`, `#folder-tree`, `#all-notes`, `#new-note`
+(the `+`), `#folder-name-input` (inline create/rename), `#search-input`, `#notes-list` (with
+`data-note-count`), `#notes-empty`, `#load-error`, `#mutation-error`. Context menu: `#folder-context-menu`
+with items `.context-menu__item`; a refused action is the `disabled` **property** (not a class), and Escape
+removes the element rather than hiding it.
+
+**Status bar.** `#status-bar` and the theme toggle `#theme-toggle`. The `data-theme-value` attribute on
+`#status-bar` is read by **nothing** — it is not part of this surface and Phase 8 removes it.
+
+**Editor.** `#editor-pane`, `#editor-placeholder`, and `#edit-probe` (the retained Phase 2 textarea, kept for
+the ⌘C/⌘V/⌘Z manual check). *(Phase 5)* adds `#editor-pane[data-note-id][data-dirty]`, `#title-input`, and
+`window.__notesEditor` — the view handle, without which no check can read or drive the editor (§10.1).
+
+**Theme.** `document.documentElement[data-theme]` — the single attribute the shell writes, and the only
+theme state a check may read (no per-component JS theme branching, §10.5).
+
+**Class naming.** BEM, `block__element` plus an `_active` modifier, with the tree keeping its `tree__*`
+prefix. Pinned because the probe's selectors and `styles.css` both depend on the exact strings.
 
 ---
 
@@ -706,7 +807,7 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 | Headings H1–H3 | yes | yes | collapsible |
 | Bullet / numbered lists | yes | yes | |
 | Task lists | yes | yes | checkbox toggles write source |
-| Blockquote / code / fenced code | yes | yes | Prism highlight |
+| Blockquote / code / fenced code | yes | yes | the package's CodeMirror/Lezer highlighting |
 | Links / images | yes | yes | images render inline |
 | Tables | yes | yes | |
 | `$$…$$` math | yes | yes | KaTeX |
@@ -862,11 +963,16 @@ Checked against `node_modules/electrobun@1.18.1` and a real `bun start` run — 
     handler for a message nobody sends is silently dead.[5]
 22. **The view has built-in requests bun can call.** `Electroview.defineRPC` merges extra handlers, among
     them `evaluateJavascriptWithResponse: { params: { script: string }; response: any }` — the package's
-    own `any`. The app declares the same params with `response: unknown` (§7's schema) and narrows at the
-    single call site (`src/bun/domProbe.ts`), so a script's value is never trusted by accident. It runs the
-    script in the view and returns its value. Bun reaches it via `win.webview.rpc.request.
+    own `any`. The app declares the same params with `response: unknown` (§7's schema) and narrows it in
+    the probe's own `evaluate` helper (`src/bun/phase4Probe.ts`) — the DOM hooks every check reads are
+    listed in §10.6 — so a script's value is never trusted by
+    accident. It runs the script in the view and returns its value — any structured value, so a script can
+    return an object or an array. Bun reaches it via `win.webview.rpc.request.
     evaluateJavascriptWithResponse({ script })` — only if the schema declares it, since the built-in is not
-    merged into the bun-side types. Plain `executeJavascript(js)` stays fire-and-forget.[6][11]
+    merged into the bun-side types. Plain `executeJavascript(js)` stays fire-and-forget.[6][11] One script
+    is one step: React has not committed by the time a script returns, so an action and the read of its
+    result belong in two scripts, and anything trailing a timer (a debounce, a save) is polled to a
+    deadline rather than slept for.
 23. **Menu `role` strings are unvalidated, though labels are not required.** `ApplicationMenuItemConfig.role`
     is typed `string` rather than a union, so a wrong role type-checks fine and is forwarded to the native
     side, where an unknown selector lands as a **label-less item** rather than an error. Omitting `label` is
