@@ -35,24 +35,34 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
 
 *Deps: none. Retires the "wrong mental model" risk first.*
 
-- [ ] `package.json`: `electrobun@1.18.1`, React 18, TypeScript, Vite 6, `@vitejs/plugin-react`; scripts
-      per SPEC §4.3 (`start`, `dev`, `dev:hmr`, `hmr`, `build:canary`, `build:stable`).
-- [ ] `electrobun.config.ts` exactly as SPEC §4.1: `app`, `runtime`, `build.bun.entrypoint`,
+- [x] `package.json`: `electrobun@1.18.1`, React 18, TypeScript, Vite 6, `@vitejs/plugin-react`; scripts
+      per SPEC §4.3 (`start`, `dev`, `dev:hmr`, `hmr`, `build:canary`, `build:stable`), plus
+      `build:renderer` (Vite alone) and a `type-check` gate (SPEC §15.15 — a bare `tsc --noEmit` cannot pass).
+- [x] `electrobun.config.ts` exactly as SPEC §4.1: `app`, `runtime`, `build.bun.entrypoint`,
       `build.copy` (`dist/index.html` + `dist/assets` → `views/mainview/`), `watchIgnore: ["dist/**"]`,
       per-OS `bundleCEF: false`.
-- [ ] `vite.config.ts` with `root: "src/mainview"`, `build.outDir: "../../dist"`, `emptyOutDir`.
-- [ ] `tsconfig.json` + `@/*` path alias → `src/mainview/`.
-- [ ] Minimal `src/mainview/{index.html,main.tsx,styles.css}` rendering a placeholder shell,
+- [x] `vite.config.ts` with `root: "src/mainview"`, `build.outDir: "../../dist"`, `emptyOutDir`.
+- [x] `tsconfig.json` + `@/*` path alias → `src/mainview/`.
+- [x] Minimal `src/mainview/{index.html,main.tsx,App.tsx,styles.css}` rendering a placeholder shell,
       and `src/bun/index.ts` opening a `BrowserWindow` on `views://mainview/index.html`.
-- [ ] Do **not** declare `build.views` (Vite owns the renderer build — SPEC §4.1).
+- [x] Do **not** declare `build.views` (Vite owns the renderer build — SPEC §4.1).
 
-**Verification**
-- `bun install` finishes with no missing peer/module errors.
-- `bun start` opens a native window whose title is `Notes` and whose content came from
-  **`views://mainview/index.html`** — not `file://` (confirm via the window URL / devtools).
-- Editing a renderer file and re-running `bun start` shows the change (i.e. Vite → `dist/` → `views/`
-  copy is actually wired, not assumed).
-- `bunx tsc --noEmit` exits 0.
+**Verification** — complete, reproduced 2026-10-04
+- `bun install`: 141 packages, no missing peer/module errors.
+- `bun start`: `[bun] window created { id: 1 }` then
+  `[bun] webview dom-ready — views://mainview/index.html loaded`; zero errors in the dev log.
+- The window's content demonstrably came from `views://` **and** React mounted: a temporary probe had
+  the view report its own DOM text back through the URL hash, which bun read as `did-navigate-in-page` →
+  `#proof=Notes|myNoteAppV2 · Electrobun v1 shell · phase-1` (the rendered `<h1>` + marker paragraph).
+  Probe removed afterwards; only the `dom-ready` log stays.
+- Copy chain is wired, not assumed: `Resources/app/views/mainview/index.html` is byte-identical to
+  `dist/index.html` (sha256 `3b17bc67…`) and the `/assets/index-*.{js,css}` names referenced by that HTML
+  exist in the same bundle view root.
+- Renderer edit propagates: setting `SHELL_MARKER` to `phase-1-edited` and re-running
+  `bun run build:renderer` yielded a bundle containing the new value with the old one gone; reverting
+  restored it exactly (`git diff` clean for `App.tsx`).
+- `bun run type-check`: `type-check OK — 0 project errors (6 known electrobun-internal error(s)
+  quarantined)`.
 
 ## Phase 2 — Two-sided RPC bridge, window wiring, main-process skeleton
 

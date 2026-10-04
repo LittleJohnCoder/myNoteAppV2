@@ -1,0 +1,72 @@
+/* Phase 1 keeps styling to the token layer + the shell. Full sidebar/editor tokens
+   arrive with their components (CODE_STYLE.md §11). */
+
+:root {
+  --color-text: #1b1f23;
+  --color-text-muted: #6a737d;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f6f8fa;
+  --color-border-divider: #eaecef;
+  --color-accent: #2f81f7;
+  --radius-note: 6px;
+
+  --font-editor: "SFMono-Regular", "JetBrains Mono", ui-monospace, monospace;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+}
+
+:root[data-theme="dark"] {
+  --color-text: #e6edf3;
+  --color-text-muted: #8b949e;
+  --color-surface: #161b22;
+  --color-surface-hover: #1f242c;
+  --color-border-divider: #30363d;
+  --color-accent: #58a6ff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.shell__header {
+  border-bottom: 1px solid var(--color-border-divider);
+  padding-bottom: var(--space-2);
+}
+
+.shell__title {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.shell__meta {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-editor);
+  font-size: 0.8125rem;
+}
+
+.shell__note {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}

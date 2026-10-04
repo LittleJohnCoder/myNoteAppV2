@@ -1,6 +1,7 @@
 # SPEC — Obsidian-like Note-Taking App (Electrobun v1)
 
-Status: draft
+Status: draft — §15.14–20 verified against the installed `electrobun@1.18.1` (Phase 1);
+the rest is still documentation-derived.
 Target framework: **Electrobun v1** (pinned `1.18.1`)
 Supersedes: `../myNotesApp/SPEC.md`
 Scope: product behaviour **plus** the exact Electrobun v1 integration contract
@@ -515,6 +516,48 @@ export to HTML/PDF.
     is a monorepo artifact. Use `"electrobun": "1.18.1"`.[14]
 13. **No `bun.ts` / `bun.html`.** They never existed. Main is
     `src/bun/index.ts`; webview HTML is `src/mainview/index.html`.[1][12]
+
+
+### Verified against the installed package (Phase 1)
+Checked against `node_modules/electrobun@1.18.1` and a real `bun start` run — not from docs.
+
+14. **The npm package ships source, not a build.** Its exports are raw `.ts`:
+    `./bun` → `dist/api/bun/index.ts`, `./view` → `dist/api/browser/index.ts`
+    (plus `./carrot`). Bun loads them directly. Present on the bun side:
+    `BrowserWindow`, `BrowserView`, `Utils`, `ApplicationMenu`, `PATHS`,
+    `BuildConfig`, `defineElectrobunRPC`, and the type-only `RPCSchema` +
+    `ElectrobunConfig`; the view side exports `Electroview`. `defineRPC` is a
+    **static on both** `BrowserView` and `Electroview`.
+15. **`type-check` cannot be a bare `tsc --noEmit`.** Because that source is `.ts`
+    rather than `.d.ts`, `skipLibCheck` does not cover it, and
+    `dist/api/bun/proc/native.ts` raises 6 assignability errors (Bun FFI pointer
+    types) under every `@types/bun` from 1.3.8 → 1.4.2, strict or not. `@types/three`
+    is also required — its webGPU layer imports `three`, which ships no types. Use
+    `scripts/typecheck.sh`: it fails on any error outside `node_modules/electrobun/`
+    and prints the quarantined count, so a real error cannot hide behind it.
+16. **The first CLI run downloads the platform runtime.** `bin/electrobun.cjs`
+    fetches `electrobun-cli-<os>-<arch>.tar.gz` for the pinned version; the native
+    CLI then fetches `electrobun-core-<os>-<arch>.tar.gz` (27.5 MB: `bun`,
+    `launcher`, `libNativeWrapper.dylib`, `bsdiff`, `bspatch`, …) into
+    `node_modules/electrobun/dist-<os>-<arch>/`. Both need network once.
+17. **Where the copy map actually lands.** Views are referenced as
+    `views://mainview/…` and served from
+    `build/<channel>-<os>-<arch>/<App>.app/Contents/Resources/app/views/mainview/`.
+    `dist/index.html` arrives byte-identical; Vite's `/assets/…` refs resolve under
+    that same view root, so no `base` rewrite is needed.
+18. **Bun-side webview events are the cheap verification channel.**
+    `BrowserWindow.webview` → `BrowserView.on("dom-ready" | "did-navigate" |
+    "did-navigate-in-page" | "did-commit-navigation" | …)` with payload
+    `{ detail: { url } }`. `executeJavascript(js)` is fire-and-forget — no completion
+    callback — so the view can only report back through navigation or RPC.
+19. **`build.views` is supported but stays undeclared here.** The CLI reads
+    `config.build.views` when present (and its own scaffold writes that form); this
+    app uses only the `copy` map so Vite remains the single source of the renderer.
+20. **Dev bundle facts.** `Resources/app/build.json` reads
+    `{"defaultRenderer":"native","availableRenderers":["native"],
+    "runtime":{"exitOnLastWindowClosed":true},"bunVersion":"1.3.13"}` — with
+    `bundleCEF: false` the renderer is the OS webview (WKWebView), and the packaged
+    bun comes from the core tarball, not from the dev machine's bun.
 
 ### Porting to v2 later (for planning only)
 The documented v1→v2 change is narrow: default main runtime Bun → Cottontail
