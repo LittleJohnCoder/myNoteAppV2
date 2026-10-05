@@ -1,6 +1,6 @@
 import { Electroview } from "electrobun/view";
 
-import type { NoteChangedPayload, NotesRPC } from "../shared/types";
+import type { NoteChangedPayload, NotesRPC, ViewContextPayload } from "../shared/types";
 
 /**
  * The webview half of the RPC bridge (SPEC §6, §15.5). This module owns the transport and
@@ -9,8 +9,17 @@ import type { NoteChangedPayload, NotesRPC } from "../shared/types";
  */
 
 type NoteChangedListener = (change: NoteChangedPayload) => void;
+type ViewContextListener = (context: ViewContextPayload) => void;
 
 const noteChangedListeners = new Set<NoteChangedListener>();
+const viewContextListeners = new Set<ViewContextListener>();
+
+/**
+ * The last context bun announced, replayed to a subscriber that arrives after it — the editor pane
+ * asks for it from an effect, and a mount ordering that puts that effect after the push must not
+ * silently lose the answer (the push itself is fire-and-forget, SPEC §15.21).
+ */
+let currentContext: ViewContextPayload | null = null;
 
 const rpc = Electroview.defineRPC<NotesRPC>({
   maxRequestTime: 30_000,
@@ -24,6 +33,10 @@ const rpc = Electroview.defineRPC<NotesRPC>({
       logToWebview: ({ level, msg }) => console[level](msg),
       noteChanged: (change) => {
         for (const listener of noteChangedListeners) listener(change);
+      },
+      viewContext: (context) => {
+        currentContext = context;
+        for (const listener of viewContextListeners) listener(context);
       },
     },
   },
@@ -42,6 +55,19 @@ export const onNoteChanged = (listener: NoteChangedListener): (() => void) => {
   noteChangedListeners.add(listener);
   return () => {
     noteChangedListeners.delete(listener);
+  };
+};
+
+/**
+ * Subscribe to bun's announcement of which channel this window is running in (SPEC §7's
+ * `viewContext`). It arrives right after the view announces itself, so a subscriber registered in
+ * the same mount gets it — and one that registers later gets the remembered value immediately.
+ */
+export const onViewContext = (listener: ViewContextListener): (() => void) => {
+  viewContextListeners.add(listener);
+  if (currentContext) listener(currentContext);
+  return () => {
+    viewContextListeners.delete(listener);
   };
 };
 

@@ -15,7 +15,13 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-markdown": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "codemirror-markdown-hybrid": "1.2.2",
     "electrobun": "1.18.1",
+    "katex": "^0.16.47",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^5.0.15"

@@ -5,8 +5,12 @@
 # disk only:
 #   CODE_STYLE.md — internal house style guide
 #   lessons.md    — measured Electrobun traps/lessons (may name machine-local paths)
+#   debug.md      — live scratchpad for ONE open bug: measured evidence, ranked theories and the
+#                   pending experiment list. Machine-local paths and harness notes; worthless once
+#                   the bug is closed (its durable lesson belongs in lessons.md).
 CODE_STYLE.md
 lessons.md
+debug.md
 
 # ---------------------------------------------------------------------------
 # Dependencies

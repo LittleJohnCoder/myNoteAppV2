@@ -108,6 +108,14 @@ export type NotesRPC = {
        * view initiated those and re-reads the tree itself.
        */
       noteChanged: { id: string; updatedAt: number };
+      /**
+       * bun → view, right after the handshake: which channel this window is running in. It exists
+       * because the renderer's **only** channel signal is otherwise the built bundle's environment
+       * — `import.meta.env.DEV` is false in exactly the run the dev probe uses (`bun start` loads
+       * the built view), so the dev-only editor handle needs the answer from the side that knows it
+       * (SPEC §10.1, §15.7).
+       */
+      viewContext: { channel: string };
     };
   }>;
 };
@@ -117,3 +125,4 @@ export type NotesRPC = {
  * source of truth for what an incoming push looks like.
  */
 export type NoteChangedPayload = NotesRPC["webview"]["messages"]["noteChanged"];
+export type ViewContextPayload = NotesRPC["webview"]["messages"]["viewContext"];

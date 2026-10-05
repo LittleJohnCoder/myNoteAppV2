@@ -292,41 +292,9 @@ body {
   font-size: 0.8125rem;
 }
 
-/* Editor pane (Phase 4 placeholder) */
-.editor {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-  max-width: var(--editor-max-width);
-  background: var(--color-canvas);
-}
-
-.editor__surface {
-  flex: 1;
-  min-height: 0;
-  padding: var(--space-3);
-  overflow: auto;
-}
-
-.editor__placeholder {
-  margin: 0 0 var(--space-3);
-  color: var(--color-text-muted);
-  font-family: var(--font-editor);
-  font-size: 0.8125rem;
-}
-
-.editor__edit-probe {
-  width: 100%;
-  box-sizing: border-box;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border-divider);
-  border-radius: var(--radius-note);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-family: var(--font-editor);
-  font-size: 0.8125rem;
-}
+/* The editor pane's own styles live in `editor/editor.css` (CODE_STYLE §11.4/§11.5): the hybrid
+   editor, its host and the title field are one feature's styling, kept beside the code that owns
+   them. The `--editor-max-width` token above still frames it. */
 
 /* Toolbar */
 .toolbar {

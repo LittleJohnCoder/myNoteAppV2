@@ -29,6 +29,12 @@ export const useDraftNote = create<DraftNoteState>((set) => ({
 /** `null` when there is no draft; otherwise its folder (SPEC §10.5's `{ folder } | null`). */
 export const useDraftFolder = (): string | null => useDraftNote((state) => (state.id ? state.folder : null));
 
+/**
+ * The draft's identity token, exposed for the editor pane's title field: it must re-focus when the
+ * user presses `+` again in the same folder, which "a draft exists" cannot express (§10.5).
+ */
+export const useDraftToken = (): number => useDraftNote((state) => state.id);
+
 export const useStartDraft = (): DraftNoteState["startDraft"] =>
   useDraftNote((state) => state.startDraft);
 

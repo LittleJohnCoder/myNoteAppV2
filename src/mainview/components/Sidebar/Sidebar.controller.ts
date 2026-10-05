@@ -138,9 +138,13 @@ export const useSidebarController = (options: SidebarOptions): SidebarController
   );
 
   const handleStartDraft = useCallback((): void => {
-    // SPEC §10.5: the draft targets the selected folder, or the notebook root. It writes nothing.
+    // SPEC §10.5: the draft targets the selected folder, or the notebook root. It writes nothing —
+    // and the note selection is cleared, because the draft is what the editor pane now shows: a
+    // draft is not a note, and the active row would otherwise point at a document nobody is looking
+    // at (§10.5's "drafts are invisible to the sidebar").
     startDraft(selectedFolderPath ?? "");
-  }, [startDraft, selectedFolderPath]);
+    selectNote(null);
+  }, [startDraft, selectedFolderPath, selectNote]);
 
   const handleOpenMenu = useCallback((path: string, x: number, y: number): void => {
     setMenu({ open: true, target: path, x, y });

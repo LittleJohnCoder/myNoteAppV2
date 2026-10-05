@@ -70,12 +70,35 @@ registry version instead:
 "dependencies": { "electrobun": "1.18.1" }
 ```
 
-Editor package, measured against `1.2.2` (its README and its `package.json`, not inferred): the entry
+**Editor package, measured against `1.2.2`** (its README and its `package.json`, not inferred): the entry
 point is `hybridMarkdown(options?)`, and the only options are `theme`, `enablePreview`, `enableKeymap`
 (**default `true`**) and `enableCollapse`. It also exports an `actions` map the toolbar dispatches
 against, plus `toggleHybridMode` / `setMode` and `toggleTheme` / `setTheme(view, theme)`. Two
 consequences are pinned in §10.1: `enableKeymap: false` is what makes "toolbar-only" true, and the
-package has **no** split-preview mode. Phase 5 installs it as:
+package has **no** split-preview mode.
+
+**What the tarball actually contains** (measured again in Phase 5, from `node_modules`, because the
+registry metadata has no README — four things the docs above could not state):
+
+- **No type declarations.** Its `package.json` points `types` at `./dist/index.d.ts`, and that file is
+  not in the published tarball (`lib/` is the readable ESM source, `dist/` is the bundled output).
+  A hand-written `src/mainview/editor/codemirror-markdown-hybrid.d.ts` declares the surface the app
+  uses — the alternative was a silent `any`, which would have hidden a wrong call.
+- **No stylesheet, and none injected.** The editor's own themes are CodeMirror theme extensions
+  (`lib/theme/*.js`), so nothing needs importing for the editor chrome. **KaTeX is the exception**:
+  the package calls `katex.renderToString` but ships no CSS for it, and injects none, so math renders
+  as unstyled HTML unless its stylesheet is loaded. `katex` is therefore declared as a **direct
+  dependency** (same `^0.16.x` range the package requires, so exactly one copy installs) and
+  `src/mainview/editor/extensions.ts` imports `katex/dist/katex.min.css`. This is the one documented
+  deviation from "do not add them directly": the renderer arrives transitively, the stylesheet does not.
+- **`hybridMarkdown` already composes `markdown()` itself**, along with history, `defaultKeymap`,
+  line wrapping and its own fence highlighting. Adding `@codemirror/lang-markdown` to the composition
+  again would parse the document twice. The peer is still installed (§2 above) — it is a declared peer
+  of the package — but the editor passes exactly one language extension.
+- **24.5 MB unpacked** (Mermaid and KaTeX bundled), which is why the Vite build reports a 1.5 MB
+  entry chunk and ~36 MB of lazy Mermaid diagram chunks. Expected, not a defect.
+
+Phase 5 installs it as:
 
 ```bash
 bun add codemirror-markdown-hybrid@1.2.2 @codemirror/state@^6 @codemirror/view@^6 \
@@ -104,6 +127,7 @@ myNoteAppV2/
 │   │   ├── index.ts            # main process (Bun runtime) — RPC handlers + window
 │   │   ├── smoke.ts            # dev-only Phase 3 smoke — drives the ten methods through the handler map
 │   │   ├── phase4Probe.ts      # dev-only DOM probe over §15.22 — shell/tree/search/folders/DnD/theme (checks 1–20)
+│   │   ├── phase5Probe.ts      # dev-only editor probe (§10.1) — mount/open/save/drafts/title/status (checks 1–11)
 │   │   └── notes/              # filesystem layer — one concern per file (§9.1)
 │   │       ├── index.ts        # barrel exporting the functions §5 imports
 │   │       ├── paths.ts        # id ↔ path mapping + containment checks
@@ -124,9 +148,13 @@ myNoteAppV2/
 │       ├── services/           # thin wrappers over the RPC client (CODE_STYLE §9.2)
 │       ├── store/              # Zustand: selectedFolder, selectedNote, draftNote, theme (§10.5)
 │       ├── utils/              # pure helpers, each with a co-located `*.test.ts` (cx, truncateSnippet,
-│       │                       #   folderTree, noteFilter, rekey, noteDrag, errorMessage)
-│       ├── editor/             # CodeMirror + hybrid plugin wiring — `extensions.ts` + `createEditor.ts` (Phase 5)
-│       └── styles.css          # plain CSS (no Tailwind)
+│       │                       #   folderTree, noteFilter, rekey, noteDrag, errorMessage, titleCharset,
+│       │                       #   noteLocation, documentCounts)
+│       ├── editor/             # CodeMirror + hybrid plugin wiring (Phase 5): `extensions.ts` (the one
+│       │                       #   composition + save cadence), `createEditor.ts` (view lifecycle),
+│       │                       #   `editor.css` (CODE_STYLE §11.4/§11.5 — the pane's own styles), and
+│       │                       #   `codemirror-markdown-hybrid.d.ts` (the package ships no types, §2)
+│       └── styles.css          # plain CSS (no Tailwind) — everything except the editor pane's own
 └── dist/                       # Vite output — generated; Electrobun copies it into views/
 ```
 
@@ -453,6 +481,13 @@ export type NotesRPC = {
       // later second window or an external edit. delete/move/rename are deliberately NOT covered — the
       // view initiated those and re-reads the tree itself; a coarse "re-read" push is post-MVP.
       noteChanged: { id: string; updatedAt: number };
+      // Phase 5 addition: which channel this window is running in, sent once, right after the
+      // handshake and before any probe runs. The renderer cannot work this out for itself —
+      // `import.meta.env.DEV` is false under `bun start`, which loads a *built* bundle, and that is
+      // exactly the run the dev probe uses — so the dev-only editor handle (§10.1, §10.6) is gated
+      // on this answer instead of on build flags. It is a context message, not a log: Phase 8 may
+      // hang channel-dependent behaviour off it.
+      viewContext: { channel: string };
     };
   }>;
 };
@@ -669,11 +704,18 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 - Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`). The package has no
   split-preview mode, so the earlier "split" wording is withdrawn.
 - Theme: light/dark through the package's `theme` option, with `setTheme(view, theme)` for live switching;
-  §10.5 keeps the store the single source. Phase 5 passes the initial value, Phase 6 owns the live sync.
-- **Dev-only read-back (testability).** `createEditor()` exposes the view on `window.__notesEditor` when
-  the channel is `dev`, and the editor pane renders `#editor-pane[data-note-id][data-dirty]`. A DOM-only
-  probe cannot read this editor — its document lives in `EditorState`, not in the DOM — so these are the
+  §10.5 keeps the store the single source. **Phase 5 wires the live switch, not just the initial value**
+  (the pane applies the store's theme to the view on every change): Phase 5's manual check 13 asks for
+  the toggle to be followed without a stale half-dark surface, and the initial value alone cannot
+  satisfy it. Phase 6 still owns proving it end to end with the rest of the rendering.
+- **Dev-only read-back (testability).** The pane exposes the view on `window.__notesEditor` when the
+  channel is `dev`, and renders `#editor-pane[data-note-id][data-dirty][data-draft]`. A DOM-only probe
+  cannot read this editor — its document lives in `EditorState`, not in the DOM — so these are the
   handles Phase 5's checks drive and read (§15.22).
+  The channel is **not** a build flag: `import.meta.env.DEV` is false under `bun start`, which is the run
+  the probe uses, so bun sends `viewContext` (§7) right after the handshake and the pane assigns the
+  handle when it arrives. The assignment lives in the pane's controller, not in `createEditor()`: the
+  factory runs before the answer exists, and a handle assigned there would be a guess.
 
 ### 10.2 Sidebar (~280 px)
 - Folder tree (top region): recursive, expand/collapse. CSS: `--tree-min-height: 140px` with a
@@ -786,10 +828,19 @@ removes the element rather than hiding it.
 
 **Status bar.** `#status-bar` and the theme toggle `#theme-toggle`. The `data-theme-value` attribute on
 `#status-bar` is read by **nothing** — it is not part of this surface and Phase 8 removes it.
+*(Phase 5)* `#status-bar` also carries `data-words`, `data-lines` and `data-location`, mirrored from the
+visible fields: the probe asserts three fields at once, and reading them off `textContent` would tie a
+check to label punctuation. The values are the *rendered* strings, so the no-note state reads `—`.
 
-**Editor.** `#editor-pane`, `#editor-placeholder`, and `#edit-probe` (the retained Phase 2 textarea, kept for
-the ⌘C/⌘V/⌘Z manual check). *(Phase 5)* adds `#editor-pane[data-note-id][data-dirty]`, `#title-input`, and
-`window.__notesEditor` — the view handle, without which no check can read or drive the editor (§10.1).
+**Editor.** `#editor-pane` (`data-note-id`, `data-dirty`, `data-draft`), `#editor-placeholder` (the
+no-note empty state), `#title-input`, `#editor-error` (the pane's own failure surface — the sidebar's
+`#mutation-error` is scoped to the sidebar) and `window.__notesEditor` (§10.1) — the view handle, without
+which no check can read or drive the editor.
+
+`#edit-probe` is **retired** in Phase 5, as todo.md's Phase 5 says: the editor's body is now the editable
+target, so the ⌘C/⌘V/⌘Z manual check (Phase 4's item 5) is run against the editor body from Phase 5 on.
+The protocol stays editable — `#title-input` is a plain `<input>`, and the editor body is a
+contenteditable — so nothing about the check changes except which element it is pointed at.
 
 **Theme.** `document.documentElement[data-theme]` — the single attribute the shell writes, and the only
 theme state a check may read (no per-component JS theme branching, §10.5).

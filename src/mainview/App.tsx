@@ -8,7 +8,7 @@ import { useAppController } from "./App.controller";
 
 // Bump this whenever a fresh renderer build has to be proven to have reached the window: seeing
 // the new value, or grepping it out of `dist/`, rules out a stale copy chain (Phase 1 lesson).
-export const SHELL_MARKER = "phase-4";
+export const SHELL_MARKER = "phase-5";
 
 /**
  * The shell: sidebar, editor pane, status bar (SPEC §10.3). It owns no logic of its own — it
@@ -47,7 +47,7 @@ const App: React.FC = () => {
           loadError={loadError}
           onRefresh={refresh}
         />
-        <EditorPane selectedNoteId={selectedNoteId} draftFolder={draftFolder} />
+        <EditorPane />
       </div>
       <StatusBar />
     </main>

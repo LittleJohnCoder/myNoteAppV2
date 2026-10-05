@@ -16,6 +16,7 @@ import {
   writeNote,
 } from "./notes";
 import { runPhase4Probe } from "./phase4Probe";
+import { runPhase5Probe } from "./phase5Probe";
 import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
@@ -89,13 +90,27 @@ export type NotesHandlers = {
 };
 
 const notesHandlers: NotesHandlers = {
-  // Handlers stay one-liners: the notes layer returns the §7 envelopes itself (§9.1), so there
-  // is no error plumbing to duplicate here.
+  // Handlers stay one-liners where they can: the notes layer returns the §7 envelopes itself
+  // (§9.1), so there is no error plumbing to duplicate here.
   getAllNotes: async () => listAllNotes(NOTEBOOK_DIR),
   getFolders: async () => readFolderTree(NOTEBOOK_DIR),
   openNote: async ({ id }) => readNote(NOTEBOOK_DIR, id),
-  saveNote: async ({ id, content }) => writeNote(NOTEBOOK_DIR, id, content),
-  createNote: async ({ folder, title }) => createNote(NOTEBOOK_DIR, folder, title),
+  /**
+   * SPEC §9.1: the `noteChanged` push belongs **here**, after the write — never in the renderer,
+   * which would be echoing its own edit back into the open editor (and a reload would move the
+   * caret). Only a successful write pushes: a refused save changed nothing, so there is nothing for
+   * the list to re-read.
+   */
+  saveNote: async ({ id, content }) => {
+    const result = await writeNote(NOTEBOOK_DIR, id, content);
+    if (result.ok) pushNoteChanged(id, result.updatedAt);
+    return result;
+  },
+  createNote: async ({ folder, title }) => {
+    const result = await createNote(NOTEBOOK_DIR, folder, title);
+    if (result.ok && result.note) pushNoteChanged(result.note.id, result.note.updatedAt);
+    return result;
+  },
   deleteNote: async ({ id }) => deleteNote(NOTEBOOK_DIR, id),
   createFolder: async ({ parent, name }) => createFolder(NOTEBOOK_DIR, parent, name),
   deleteFolder: async ({ path }) => deleteFolder(NOTEBOOK_DIR, path),
@@ -127,10 +142,37 @@ const mainWindow = new BrowserWindow({
 
 console.log("[bun] window created", { id: mainWindow.id });
 
+/**
+ * The app's own re-read trigger (SPEC §9.1): fire-and-forget, sent by the handlers above after a
+ * successful write. `mainWindow` is read lazily — the handlers exist before the window does.
+ *
+ * Deferred by a tick on purpose: sending to the view from **inside** a request handler wedges the
+ * channel (measured in Phase 5 — the write itself landed, and every request after it timed out, so
+ * the view's own `saveNote` never got its response). `setTimeout` is the reliable tick: the response
+ * is written from a microtask, so a microtask here would still overtake it.
+ */
+function pushNoteChanged(id: string, updatedAt: number): void {
+  setTimeout(() => {
+    if (id !== "") console.log(`[bun] push noteChanged — ${id}`);
+    mainWindow.webview.rpc?.send.noteChanged({ id, updatedAt });
+  }, 0);
+}
+
 // Phase 1 verification surface: "dom-ready" fires once the view has loaded a document, so its
 // absence is a real signal that the view/copy chain broke (SPEC §8).
 mainWindow.webview.on("dom-ready", () => {
   console.log(`[bun] webview dom-ready — ${viewUrl} loaded`);
+});
+
+// A page that navigates is the one failure no RPC check can describe: every request after it goes to
+// a socket nobody is listening on, and the probe can only report timeouts. Logged so a wedged run
+// says *why* it is wedged (measured in Phase 5: the view reloaded mid-probe, and "the channel is
+// wedged" was the only symptom from bun's side).
+mainWindow.webview.on("will-navigate", (event) => {
+  console.log("[bun] view will-navigate", event);
+});
+mainWindow.webview.on("did-navigate", (event) => {
+  console.log("[bun] view did-navigate", event);
 });
 
 /**
@@ -176,11 +218,32 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
     msg: `bun received viewReady from ${url}`,
   });
 
+  // SPEC §7/§10.1: which channel this window is in, before any probe runs. The renderer cannot work
+  // this out for itself — `import.meta.env.DEV` is false under `bun start`, which is exactly the run
+  // the dev probe uses — so the dev-only editor handle is gated on this answer.
+  rpc.send.viewContext({ channel });
+
   if (channel !== "dev") return;
+
+  // `PROBE_SKIP=1` starts a quiet dev window: no smoke, no probes. A full probe run holds the
+  // notebook for minutes and can end up wedged (lessons.md), which makes a *manual* verification
+  // unreadable — the window is busy with fixtures of its own. This is the switch for handing the app
+  // to a human instead of to a script.
+  if (process.env.PROBE_SKIP === "1") {
+    console.log("[bun] PROBE_SKIP=1 — dev window is quiet (no smoke, no probes)");
+    return;
+  }
 
   await phase3Done;
 
   await runPhase4Probe({
+    dir: NOTEBOOK_DIR,
+    evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+    pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+  });
+
+  // Phase 5 drives the mounted editor, so it needs Phase 4 to have left a live, unchanged window.
+  await runPhase5Probe({
     dir: NOTEBOOK_DIR,
     evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
     pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),

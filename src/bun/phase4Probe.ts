@@ -81,7 +81,9 @@ const scriptFolderRow = (path: string): string => `
 `;
 
 const SCRIPT_NOTE_IDS = `
-  return Array.from(document.querySelectorAll("[data-note-id]"))
+  // Scoped to the list: since Phase 5 the editor pane carries data-note-id too (§10.6), and an
+  // unscoped query would hand back the pane as if it were a row.
+  return Array.from(document.querySelectorAll("#notes-list [data-note-id]"))
     .map((row) => row.getAttribute("data-note-id"));
 `;
 
@@ -154,7 +156,7 @@ const scriptPressEscape = (): string => `
  * folder prevented the default (without which no drop is delivered).
  */
 const scriptDragDrop = (noteId: string, folderPath: string): string => `
-  const row = document.querySelector('[data-note-id=${quote(noteId)}]');
+  const row = document.querySelector('#notes-list [data-note-id=${quote(noteId)}]');
   const target = document.querySelector('button[data-folder-path=${quote(folderPath)}]');
   if (!row || !target) return "missing:" + (row ? "drop-target" : "note-row");
   if (typeof DataTransfer !== "function") return "no-DataTransfer-constructor";
@@ -185,7 +187,7 @@ const scriptPressEnter = (selector: string): string => `
 `;
 
 const SCRIPT_DRAG_WIRING = `
-  const noteRow = document.querySelector("[data-note-id]");
+  const noteRow = document.querySelector("#notes-list [data-note-id]");
   return {
     noteDraggable: noteRow?.getAttribute("draggable") === "true",
     dropZones: document.querySelectorAll("button[data-drop-zone='true']").length,
@@ -503,7 +505,7 @@ export const runPhase4Probe = async ({
       )) as { draft: string | null; note: string | null };
       const afterDraft = asStrings(await read(SCRIPT_NOTE_IDS));
 
-      await read(scriptClick(`[data-note-id='${FOLDER}/alpha.md']`));
+      await read(scriptClick(`#notes-list [data-note-id='${FOLDER}/alpha.md']`));
       const abandoned = (await readEventually(SCRIPT_SHELL_STATE, (value) =>
         (value as { note: string | null }).note === `${FOLDER}/alpha.md`,
       )) as { draft: string | null; note: string | null };
@@ -558,7 +560,7 @@ export const runPhase4Probe = async ({
     // (§12: ids are paths, so every descendant note's id changes).
     await check(14, async () => {
       await read(scriptClick(`button[data-folder-path='${FOLDER}']`));
-      await read(scriptClick(`[data-note-id='${FOLDER}/alpha.md']`));
+      await read(scriptClick(`#notes-list [data-note-id='${FOLDER}/alpha.md']`));
 
       await read(scriptOpenMenu(FOLDER));
       const askedName = await read(scriptClickMenuItem("Rename Folder"));
@@ -612,7 +614,7 @@ export const runPhase4Probe = async ({
     // 16 — a drag moves the note for real: the row carries the id, the folder accepts the drop, the
     // file moves on disk, and the list plus the selection re-key from `moveNote`'s `newId` (§10.5).
     await check(16, async () => {
-      await read(scriptClick(`[data-note-id='${RENAMED}/alpha.md']`));
+      await read(scriptClick(`#notes-list [data-note-id='${RENAMED}/alpha.md']`));
       // Expansion is keyed by path, so the rename left Sub collapsed: open it to expose the target.
       await read(scriptToggleFolder(RENAMED));
       const target = `${RENAMED}/${SUB_FOLDER}`;
