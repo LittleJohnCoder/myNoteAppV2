@@ -485,13 +485,26 @@ export const runPhase5Probe = async ({
     await check(4, async () => {
       await openInPane(ALPHA);
       const target = `${ALPHA_BODY}\n${TYPED_LINE}\n${BLUR_LINE}\n${DEBOUNCE_LINE}`;
+      const started = Date.now();
       await read(scriptSetDocument(target));
-      await sleep(700);
-      const text = await fileText(ALPHA);
+      // Polled, not slept for — the standing rule for anything trailing a timer. The debounce is a
+      // timer **in the view**, so a fixed 700 ms left only 200 ms of slack over §9.1's 500 ms; in one
+      // full-suite run (2026-10-06) it read the *previous* content and failed a correct app. The
+      // elapsed time is printed either way, so a lag is visible in the evidence rather than assumed.
+      let text = await fileText(ALPHA);
+      const deadline = Date.now() + 5_000;
+      while (text !== target && Date.now() < deadline) {
+        await sleep(150);
+        text = await fileText(ALPHA);
+      }
+      const elapsed = Date.now() - started;
+      // Which half failed matters: a pane that never took the change is a different bug from a pane
+      // that holds it and did not write it.
+      const docHeld = (await readEditor()).doc === target;
       const ok = text === target;
       return {
         ok,
-        observed: `file=${JSON.stringify(text)}`,
+        observed: `file=${JSON.stringify(text)} after=${elapsed}ms doc-holds-target=${docHeld}`,
         expected: `the file holds all four lines, byte for byte`,
       };
     });

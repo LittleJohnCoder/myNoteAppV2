@@ -17,6 +17,7 @@ import {
 } from "./notes";
 import { runPhase4Probe } from "./phase4Probe";
 import { runPhase5Probe } from "./phase5Probe";
+import { runPhase6Probe } from "./phase6Probe";
 import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
@@ -284,14 +285,31 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
 
   await phase3Done;
 
-  await runPhase4Probe({
-    dir: NOTEBOOK_DIR,
-    evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
-    pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
-  });
+  // `PROBE6_ONLY=1` runs just the Phase 6 probe. Phase 4 and Phase 5 hold the window for minutes
+  // each and the transport has been measured to go quiet mid-run, so iterating on Phase 6's own
+  // checks through the full suite is unaffordable; the boot smoke still runs first, because it
+  // asserts *exact* note-id sets and would see Phase 6's fixture appear underneath it.
+  const onlyPhase6 = process.env.PROBE6_ONLY === "1";
+  if (onlyPhase6) console.log("[bun] PROBE6_ONLY=1 — running the Phase 6 probe alone");
 
-  // Phase 5 drives the mounted editor, so it needs Phase 4 to have left a live, unchanged window.
-  await runPhase5Probe({
+  if (!onlyPhase6) {
+    await runPhase4Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+
+    // Phase 5 drives the mounted editor, so it needs Phase 4 to have left a live, unchanged window.
+    await runPhase5Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+  }
+
+  // Phase 6 drives the rendered markdown inside the same mounted editor (task checkboxes, collapse,
+  // math, mermaid, code, live theme), so it runs last and after the editor is warm.
+  await runPhase6Probe({
     dir: NOTEBOOK_DIR,
     evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
     pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),

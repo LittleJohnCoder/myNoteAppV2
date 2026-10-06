@@ -719,12 +719,44 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   continues on Enter; markup deletes on Backspace), not formatting, and the rule above is about
   formatting. (OS edit accelerators still work via the ApplicationMenu roles in §5; that is not a
   formatting shortcut and must stay.)
-- Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list,
-  Task list, Quote, Code, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against
-  the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code). Math has **no**
-  package action: it inserts `$$…$$` by hand (§2).
+- Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list, Task list, Quote, Code,
+  Code block, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against the package's
+  `actions` map. **Phase 7 pre-flight, pinned 2026-10-06:** a button's `id` **is** the package's action key.
+  The map's 18 keys (measured by importing the installed package — `Object.keys(actions)`, not by grep:
+  `alert` appears in that file only inside `codeBlock`'s sample string and is **not** an action) are
+  `bold italic strikethrough h1 h2 h3 link image bulletList numberedList taskList inlineCode codeBlock hr
+  quote table diagram emoji`. Buttons are those 17 the list above names — `hr` = Divider, `diagram` =
+  Mermaid, `inlineCode` = Code — **plus** `math`, which has no package key; labels keep the spec's words.
+  The package's `emoji` action is deliberately unused (no button, and this list never had one).
+  *Reason:* one vocabulary — `Object.keys(actions)` is the list by name, so no id→action table can drift.
+  *Beat:* kebab ids (`bullet-list`) plus a mapping table: a second name for every action, the drift class
+  that already produced `NoteList`/`NotesPanel` and "hybrid / split / raw".
+  **Math** inserts the **block** form by hand — `$$`, a blank line, `$$`, with the caret on the blank line —
+  because a math block is a line whose trimmed text is exactly `$$` (§10.6, Phase 6 Outcome): a one-line
+  `$$…$$` renders as literal text. (This corrects the earlier "inserts `$$…$$`" wording, which could not
+  render.)
+  **Two obligations the toolbar's controller carries, pinned here because Phase 7's checks assert them:**
+  each handler reads the view **at click time** through the accessor below and dispatches
+  `actions[key](view)` before calling `view.focus()` (the button took focus and the user's next act is
+  typing); and every button is `disabled` exactly while no note and no draft is open — with nothing bound
+  there is nothing to format, and the click's blur is what flushes a pending save (§9.1) before the new
+  500 ms debounce starts.
+- **The toolbar reaches the editor through the pane, never through the dev handle.** `EditorPane` passes
+  `<Toolbar />` two props: `getView: () => EditorView | null` — an accessor over the handle the pane already
+  owns — and `isEnabled` (= the pane's `hasDocument`). *Reason:* the view is created in a mount effect
+  **after** the toolbar's first render, so a value prop is `null` at that point and only an unrelated
+  re-render would fix it. *Beat:* a store holding the view (a non-serializable object in global state —
+  `store/theme.ts` is deliberately DOM-free so `bun test` can load it) and reading `window.__notesEditor`,
+  which is dev-only (§10.1) and would make shipped code depend on a probe handle.
 - Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`). The package has no
-  split-preview mode, so the earlier "split" wording is withdrawn.
+  split-preview mode, so the earlier "split" wording is withdrawn. **Phase 7 pre-flight, pinned
+  2026-10-06:** it is a toolbar button (`data-action="preview-mode"`), the **mode's source of truth is the
+  view** (`getMode(view)`, read at click time like every other handler) rather than a store — per-view state
+  the package owns, the same ruling as collapse above — and the button carries `data-mode`
+  (`"hybrid"` | `"raw"`) so a check reads the mode instead of parsing a label. Switching mode reconfigures
+  extensions only: the document is untouched, so unsaved text stays in the editor and its 500 ms save still
+  lands. *Beat:* a Zustand mirror that can disagree with the view, and persisting a mode nothing asked to
+  reopen in.
 - Theme: light/dark through the package's `theme` option, with `setTheme(view, theme)` for live switching;
   §10.5 keeps the store the single source. **Phase 5 wires the live switch, not just the initial value**
   (the pane applies the store's theme to the view on every change): Phase 5's manual check 13 asks for
@@ -832,7 +864,8 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 Every automated check in `todo.md` reads the renderer through the DOM, and this app's editor keeps its
 document outside the DOM — so the hooks below **are** the verification contract, not incidental markup. They
 are additive: no styling or behaviour may depend on them, and a check that needs a new hook adds it here
-first. Everything listed exists in the committed tree except the three marked *(Phase 5)*; a rename of any of
+first. Everything listed exists in the committed tree except the block marked *(Phase 7)*, which this surface
+pins ahead of that phase so its checks can be written against names rather than invented ones; a rename of any of
 these strings is a contract change, not a refactor.
 
 **Shell.** `#shell` carries its own state as data attributes, which is why a probe can assert the app's
@@ -867,6 +900,14 @@ agree with the rendering.
 target, so the ⌘C/⌘V/⌘Z manual check (Phase 4's item 5) is run against the editor body from Phase 5 on.
 The protocol stays editable — `#title-input` is a plain `<input>`, and the editor body is a
 contenteditable — so nothing about the check changes except which element it is pointed at.
+
+**Toolbar (Phase 7's contract — added 2026-10-06).** `#toolbar` on the container (which already carries
+`role="toolbar"`), one `button.toolbar__button` per action, each carrying a `data-action` attribute whose
+value is the package's action key for a mapped button, with `math` and `preview-mode` for the two buttons that
+are not package actions (§10.1); the `disabled` **property** while no note and no draft is open; and
+`data-mode` (`"hybrid"` | `"raw"`) plus `aria-pressed` on the preview-mode button. A check selects an action
+**by name** — `#toolbar [data-action="bold"]` — never by index or label: this phase's own list gains Code
+block, and `Code` is a prefix of `Code block`, so a `textContent` match cannot tell the two apart.
 
 **Rendered content (Phase 6's contract — added 2026-10-06).** The hybrid package renders markdown into its
 own DOM inside `.cm-content`, and Phase 6's checks assert *what is rendered* — so these strings are pinned
