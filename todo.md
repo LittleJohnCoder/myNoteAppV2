@@ -31,9 +31,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
   which the §10.2 folder context menu has always needed. Mutations return the
   `{ ok, …payload, error? }` envelope and never throw for an expected failure (SPEC §9.1). Ids change
   on move/rename, so the renderer re-keys from `newId` / `changedIds` instead of reusing the old id.
-- Editing is **toolbar-only** (no markdown keybinds) — enforced by the editor package's
-  `enableKeymap: false`, which is on by default (SPEC §2, §10.1); OS edit accelerators come from
-  `ApplicationMenu`.
+- Editing is **toolbar-only for *formatting*** — no markdown formatting shortcuts. `enableKeymap: false`
+  (the package's own default is *on*) gates the hybrid package's keymap and only that: `markdown()` from
+  `@codemirror/lang-markdown` still installs its `markdownKeymap` at high precedence, so `Enter`
+  (`insertNewlineContinueMarkup`) and `Backspace` (`deleteMarkupBackward`) are live and cannot be gated
+  this way. Measured in the package source 2026-10-06; SPEC §10.1 records the correction. OS edit
+  accelerators come from `ApplicationMenu`.
 - House style: controllers + `use<X>Controller()`, Zustand for shared state, plain CSS + `cx()`,
   `@/*` → `src/mainview/`. No Tailwind, no TanStack Query, no `cn()`.
 - Versions are part of the contract (SPEC §2): `react`/`react-dom` `^18.3.1`, `zustand` `^5.0.15`,
@@ -328,8 +331,9 @@ Toolbar,StatusBar,Loading,EditorPane,FolderNameInput,FolderContextMenu}/`.
 - [x] Drag a note onto a folder → `moveNote`; re-key the list and the selection from the returned
       `newId`; a drop on the note's current folder is a no-op; a failure reverts the row.
 - [x] Retire the Phase 2 DOM probe: `src/bun/domProbe.ts` is **deleted**, and `src/bun/phase4Probe.ts` runs
-      after the Phase 3 smoke in `bun start` (§15.22). The `#edit-probe` textarea **stays** — it is the only
-      channel for the ⌘C/⌘V/⌘Z manual check (SPEC §10.6).
+      after the Phase 3 smoke in `bun start` (§15.22). **Corrected 2026-10-06:** Phase 5 retired that
+      textarea (it is no longer in the tree); the ⌘C/⌘V/⌘Z manual check now targets the editor body
+      itself, as Phase 4's manual item 5 and SPEC §10.6 record.
 - [x] The tree's flattening helper (`flattenFolderPaths`) is gone; `utils/folderTree.ts` exports
       `ancestorFolderPaths` + `noteCountsByFolder` instead, which is what the tree and the counts use.
 
@@ -369,12 +373,19 @@ below names the check that reproduces it.
 3. The inline name input's edges: Escape cancels, blur commits, an empty name is refused.
 4. Theme end to end: click the status-bar toggle, quit, relaunch — the choice is still in effect. (The
    probe covers the storage half out of band; this covers the click.)
-5. `#edit-probe` in the editor pane: ⌘C / ⌘V / ⌘Z (the ApplicationMenu roles, SPEC §5).
+5. ⌘C / ⌘V / ⌘Z in the editor pane (the ApplicationMenu roles, SPEC §5). **Updated 2026-10-06:** the
+   Phase 2 `#edit-probe` textarea this item named no longer exists — Phase 5 retired it (§10.6) — so
+   the editable target is now the editor body itself.
 
 ## Phase 5 — Editor: mount, hybrid render, open/save persistence
 
 *Deps: 4, plus the editor package pinned (below). Deliberate split from Phase 6 — this half is "it
 renders and it persists".*
+
+*Status: **done — 10/10 tasks, 14/14 verification lines** (2026-10-05/06, two macOS machines: four probe
+suites in this checkout, one from a fresh clone on the second machine, plus the manual pair by hand). Line
+12's fenced-code clause moved to Phase 6, which already asserted it; line 14 was added this session by the
+empty-state decision. See *Outcome* under Verification.*
 
 ```bash
 bun add codemirror-markdown-hybrid@1.2.2 @codemirror/state@^6 @codemirror/view@^6 \
@@ -388,36 +399,79 @@ formats), §9.1 (save points, `noteChanged`), §10.5 (`+`, drafts, theme), §15.
 `src/mainview/components/EditorPane/{EditorPane.tsx,EditorPane.controller.ts}`,
 `src/mainview/components/TitleInput/{TitleInput.tsx,TitleInput.controller.ts}`, and the dev-only
 `src/bun/phase5Probe.ts`. *Retires:* the `EditorPane` placeholder with its `#edit-probe` textarea (Phase
-2's channel, deliberately kept through Phase 4) and the `data-draft-folder`-only draft surface — replaced
-by `#editor-pane[data-note-id][data-dirty]` + `window.__notesEditor` (§10.1). Grep SPEC §3 for anything
+2's channel, deliberately kept through Phase 4). **Corrected 2026-10-06:** the task also said it retires
+the `data-draft-folder`-only draft surface — it does not, and must not: `phase4Probe.ts` still reads that
+attribute (`#sidebar` carries it), so it stays as Phase 4's channel while `#editor-pane` gains
+`[data-note-id]`/`[data-dirty]` and `window.__notesEditor` alongside it (§10.1). Grep SPEC §3 for anything
 this phase removes (R9).
 
-- [ ] `editor/extensions.ts`: **one** composition — `hybridMarkdown({ theme, enablePreview: true,
-      enableKeymap: false, enableCollapse: true })` plus `@codemirror/lang-markdown`. `enableKeymap: false`
+- [x] `editor/extensions.ts`: **one** composition — `hybridMarkdown({ theme, enablePreview: true,
+      enableKeymap: false, enableCollapse: true })`. **Corrected 2026-10-06:** this line originally said
+      "plus `@codemirror/lang-markdown`". The code deliberately adds no second copy, because
+      `hybridMarkdown()` already bundles `markdown()`, `history()`, the default keymap and line wrapping
+      (measured against the package; see `src/mainview/editor/extensions.ts`). `enableKeymap: false`
       is load-bearing: the package's formatting keybindings are **on by default** and §10.1 is
       toolbar-only (Phase 7's ⌘B check depends on this line).
-- [ ] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
-      config. In `dev` the factory also assigns the view to `window.__notesEditor` — the only way any
-      check can read or drive this editor, since its document is not in the DOM (§10.1).
-- [ ] Title input above the body (§10.1, §10.5): focused when a draft opens, `Untitled` placeholder, input
+- [x] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
+      config. The view goes to `window.__notesEditor` in `dev` — the only way any check can read or
+      drive this editor, since its document is not in the DOM (§10.1). **Corrected 2026-10-06:** this
+      line said the *factory* assigns the handle; it is `EditorPane.controller.ts` that does, gated on
+      bun's `viewContext` push — same guarantee, different owner.
+- [x] Title input above the body (§10.1, §10.5): focused when a draft opens, `Untitled` placeholder, input
       constrained to the slug charset and lowercased, Enter/Tab/blur committing **identically**, Tab
       continuing into the body, `readOnly` (not `disabled`) once the note exists.
-- [ ] Committing a draft's title calls `createNote` **once**, clears `draftNote`, and selects the returned
+- [x] Committing a draft's title calls `createNote` **once**, clears `draftNote`, and selects the returned
       `note.id`; typing into the body instead creates the note on the first save (500 ms debounce or blur,
       whichever comes first) with `title: ""`. The editor binds to the returned id, never to the typed
       name — a collision returns `plan1` (§10.5).
-- [ ] Opening a note focuses the body at line 1 and loads its content. The body is loaded **only** on
+- [x] Opening a note focuses the body at line 1 and loads its content. The body is loaded **only** on
       selection change: a `noteChanged` refresh never reloads it, or a save would move the cursor (§9.1).
-- [ ] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the RPC
+- [x] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the RPC
       client directly); flush a pending save before switching notes.
-- [ ] Guard the async/ids: capture the note id at save time and drop the result if the selection moved, so
+- [x] Guard the async/ids: capture the note id at save time and drop the result if the selection moved, so
       a switch mid-save cannot write A's text into B.
-- [ ] Status bar: word count, line count and `filename · folder` from the **live document** (§10.3),
+- [x] Status bar: word count, line count and `filename · folder` from the **live document** (§10.3),
       returning to `—` when no note is open.
-- [ ] `noteChanged` is pushed by the **bun handlers** after a successful `createNote`/`saveNote` (§9.1);
+- [x] `noteChanged` is pushed by the **bun handlers** after a successful `createNote`/`saveNote` (§9.1);
       the renderer only refreshes the tree and the list.
+- [x] **The empty state has no body to type into** (§10.1, added 2026-10-06 after the author hit it):
+      with no note and no draft open, `#editor-placeholder` shows and the editor host is hidden by
+      `.editor__host_hidden` — mounted, never unmounted, so the CodeMirror view survives, and
+      re-measured on reveal. Before this, keystrokes there were accepted by the DOM and dropped by the
+      controller, which saves only when a note is bound or a draft is active.
 
 **Verification** — automated unless marked *(manual)*.
+
+**Outcome — 2026-10-05/06. All 14 lines reproduced** (13 original + line 14, added this session).
+`src/bun/phase5Probe.ts` passed in four runs on two macOS machines — three in this checkout (the fourth
+wedged at check 8 and is recorded in `debug.md` E16), one from a fresh clone on the second machine —
+48 ok lines each when the notebook was clean (17 smoke + 20 Phase 4 + 11 Phase 5, **0 FAIL**), alongside
+`bun run test` **95 pass / 0 fail / 200 expect() calls** and `bun run type-check` **0 project errors**
+(6 electrobun-internal quarantined). Note the false-green to watch: in the last run the Phase 3 smoke
+**skipped** because the notebook held two hand-made notes, so the total read 31 rather than 48 — the
+smoke announces the skip, and it is not a failure, but a clean notebook is what makes the suite's
+counts mean anything.
+
+- **12 (hybrid render)** — the focused line shows its source verbatim (`**Bold**`, asterisks visible,
+  active line highlighted) while the neighbouring `# Hybrid check` renders as a heading with no `#`;
+  moving the caret off the bold line renders it as **Bold** with the asterisks gone. Both directions,
+  screenshots, second machine. The probe's boot diagnostic agrees (`cmContent: "›Alphaalpha-unique-body"`
+  for `# Alpha…`). The fenced-code clause moved to Phase 6 (below).
+- **13 (theme)** — toggled to light → ⌘Q → relaunch → **light on a dark-mode Mac**, so the stored value
+  beat the `prefers-color-scheme` fallback; toggled to dark → relaunch → dark. The visual half is in the
+  same screenshots: the editor's paper dark with the sidebar and status bar, no half-dark seam.
+- **Line 10 gained a branch.** The probe's check 10 types a body with **no** H1, so it only ever
+  exercised the `untitled` title branch; by hand, a title-less note took its list title from the body's
+  first ATX H1 (§9.1's `deriveTitle`), and the sidebar also showed an H1 *below* line 1 winning
+  (`hello # Why ?` → `Why?`), which is the "anywhere in the body" clause.
+- **14 (empty state)** — added 2026-10-06 after the author hit it: see the task line above and §10.1.
+  Manual, and five seconds: a fresh `PROBE_SKIP=1` launch shows the message and no body.
+
+**Why the fenced-code clause moved to Phase 6.** Phase 6's fourth line asserts the identical thing ("A
+fenced JS block is syntax-highlighted"), so the clause was duplicated; and a verdict needs a *valid*
+block, which the MVP cannot yet produce without fighting the editor's auto-close — typing three backticks
+inserts a matching run, so text typed "inside" lands on the same line and the fence never closes (measured
+2026-10-06; filed as a Phase 7 item, since the package's `codeBlock` action is the intended route).
 
 *Channels.* `bun test` for anything pure; `src/bun/phase5Probe.ts` for the live window, chained after the
 Phase 4 probe in `bun start`. It drives the editor through `window.__notesEditor` (the document is not in
@@ -449,14 +503,64 @@ must be empty afterwards.
     line, and the list shows the body's first H1 if there is one, else `untitled` (§9.1).
 11. Opening the `.md` file directly shows only body text — the title is not written into it.
 12. *(manual)* The body renders hybrid as specified: the focused line raw, every other line rendered
-    (bold/headings visible), fenced code highlighted by the package's own languages. Task-list write-back,
-    collapse and math/mermaid are Phase 6's checks — §2 pins their versions.
+    (bold/headings visible). **Reproduced 2026-10-06** (screenshots, both directions). The fenced-code
+    clause **moved to Phase 6** on 2026-10-06 — Phase 6's fourth line already asserts the same thing, and
+    a verdict needs a code block the app cannot yet create without fighting the editor's auto-close (see
+    Phase 7). Task-list write-back, collapse and math/mermaid are Phase 6's checks — §2 pins their
+    versions.
 13. *(manual)* The editor opens in the stored theme and follows a status-bar toggle without a stale
     half-dark surface. Phase 5 owns the initial value, Phase 6 the live sync (§10.1).
+    **Reproduced 2026-10-06** on the second (dark-mode) machine, both directions, including the
+    persistence discriminator a dark host needs: toggle to light → relaunch → still light.
+14. *(manual, added 2026-10-06)* With nothing open — a fresh `PROBE_SKIP=1` launch — the pane shows the
+    empty-state message and **no body**: `#editor-pane[data-body-visible="false"]`, and there is nothing
+    to click or type into. Opening a note or pressing `+` flips it to `"true"` and the body appears.
+    *Failure:* the field is visible and typeable with nothing open — the state that silently discarded
+    keystrokes. See §10.1 and §10.6 for the rule and the hook.
 
 ## Phase 6 — Interactive markdown: task write-back, collapse, math, mermaid, theme sync
 
 *Deps: 5. The interactive half of the editor.*
+
+*Status: **ready to start** (pre-flight 2026-10-06; both blockers closed below). Deps are green — nothing
+to install, since all four features are already in the build (`codemirror-markdown-hybrid@1.2.2` and
+`katex ^0.16.47` declared; 81 katex/mermaid/diagram chunks already emitted into `dist/assets`). The two
+things that were missing — the rendered-content hooks and the four semantics — are now pinned (SPEC §10.6,
+and the decisions below).*
+
+*Measured 2026-10-06: **this phase is almost entirely verification, not implementation.*** The pinned
+package already provides the write-back (`lib/extensions/hybrid-preview.js:183` finds the clicked checkbox
+and rewrites the source), the collapse control, KaTeX and Mermaid rendering, and the fence highlighting;
+Phase 5 wired the live theme switch (`setTheme` off the store). The write-back therefore flows through the
+**existing** save path — the package's document change fires the app's `updateListener`, which schedules
+the same debounced save a keystroke would, which pushes `noteChanged`. So the tasks below read as *make
+these true and prove them*, not *write these*: the real deliverable is `phase6Probe.ts` and its seven
+checks.
+
+*Files:* `src/bun/phase6Probe.ts` — dev-only, chained after `phase5Probe` in `bun start`, seeding its own
+`Probe6` fixture and removing it in `finally` like its predecessors. **No new handler or RPC method:** a
+checkbox write-back is an ordinary body save.
+
+*Decisions — pinned 2026-10-06:*
+1. **A checkbox click saves through the normal path.** 500 ms debounce, blur flush, `data-dirty` true
+   meanwhile — the same mechanism as typing. *Reason:* one write path means one set of failure modes, and
+   §9.1's accepted quit-inside-the-window loss then applies uniformly. *Beat:* an immediate save on toggle
+   (a second write path to build and test for one discrete action) and a view-only toggle (which would
+   leave the list's preview and mtime stale).
+2. **A write-back pushes `noteChanged`.** It is a successful write to a note, which is exactly what §9.1's
+   push rule covers, so there is no exception to record. *Reason:* the sidebar's mtime and preview must
+   move when a task is ticked, precisely as they do after typing. *Beat:* treating it as a view-only
+   action.
+3. **Collapse state is ephemeral.** Never written to the file, and not preserved across a note switch or a
+   reload — coming back shows everything expanded. *Reason:* it is view state for the open document, held
+   per view by the package. *Beat:* persisting collapse per note, which is new state and a new storage
+   decision for a convenience nobody asked to keep.
+4. **"The preview followed the theme" is one computed style.** The check compares a rendered element's
+   computed `color` (a rendered heading is the natural subject) before and after the toggle. This is the
+   **one deliberate exception** to §10.6's presence-only rule, and it is recorded there too. *Reason:*
+   presence cannot fail — a stale half-dark preview has every element present, so a presence-only check
+   would report a pass on the exact defect the line exists to catch. *Beat:* presence-only, i.e. a check
+   that cannot fail.
 
 - [ ] Task-list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` **in the
       source**.
@@ -466,13 +570,31 @@ must be empty afterwards.
       and mermaid are always-on features with no options to pass.
 - [ ] Theme drives **both** the hybrid plugin and `<html data-theme>` — one source (Zustand selector), the
       live switch being `setTheme(view, theme)` off the store (§10.1). Phase 5 owned the initial value.
+      **Observable (pinned 2026-10-06):** a rendered element's computed colour changes with the toggle —
+      §10.1 and §10.6 name this as the one exception to the presence-only rule, because presence alone
+      cannot fail here.
 
-**Verification**
-- Clicking a checkbox in the rendering changes the underlying `.md` on disk (and survives reload).
-- Collapsing an H2 hides its body and expanding restores it, without editing the file.
-- A note containing `$$e^{i\pi}+1=0$$` renders the formula; a ```mermaid fence renders a diagram.
-- A fenced JS block is syntax-highlighted.
-- Theme toggle re-renders the editor preview and the shell together — no stale half-dark surface.
+**Verification** — automated through `phase6Probe.ts` unless marked *(manual)*. Each line names the
+observation it prints; the rendered subtree is `#editor-pane .cm-content` and the classes are the ones
+pinned in SPEC §10.6. **Shape rewritten 2026-10-06** (prose → numbered checks naming their observation);
+the content is unchanged except where noted.
+
+1. Clicking a rendered task checkbox rewrites that line's `- [ ]` ↔ `- [x]` in the **source**, and the
+   `.md` on disk matches once the save settles (decision 1/2 fixes what "settles" means). *Failure:* the
+   file still holds the old marker, or the change lands on another line.
+2. The same toggle survives a reload: reopen the note and the checkbox is in the new state.
+3. Collapsing an H2 hides its body (`.cm-collapsed-line` present below it) and expanding restores it,
+   with the `.md` **byte-identical** before and after. *Failure:* the file changed — collapse is a view
+   state, not an edit.
+4. A note containing `$$e^{i\pi}+1=0$$` renders the formula: `.cm-math-preview` present with the KaTeX DOM
+   inside it.
+5. A ```mermaid fence renders a diagram: `.cm-mermaid-preview` present, **polled to a deadline** because
+   the diagram chunk loads asynchronously. *Failure:* asserted from a single read.
+6. A fenced JS block is syntax-highlighted: the fence's rendered lines carry token spans, not one uniform
+   class. **Moved here from Phase 5 on 2026-10-06** — it was duplicated, and a verdict needs a valid block,
+   which only Phase 7's toolbar action can create without fighting the editor's auto-close.
+7. The theme toggle re-renders the editor preview **and** the shell together — decision 4's observation
+   holds for the rendered surface while `<html data-theme>` flips. *Failure:* a stale half-dark preview.
 
 ## Phase 7 — Toolbar (all actions) + preview mode
 
@@ -486,8 +608,18 @@ verified, not assumed.*
       action — it inserts `$$…$$` by hand (§2).
 - [ ] Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`); the package has no split
       mode, so the earlier "hybrid / split / raw" wording is withdrawn (§2).
-- [ ] Confirm **no** markdown keybinds were added: the composition already sets `enableKeymap: false`
-      (Phase 5's line, and the reason it exists) — this item is the behavioural proof, not new work.
+- [ ] Confirm **no markdown *formatting* keybinds** are live: the composition sets `enableKeymap: false`
+      (Phase 5's line, and the reason it exists) — this item is the behavioural proof, not new work. Note
+      what is *not* gated and cannot be: `@codemirror/lang-markdown`'s `markdownKeymap` keeps `Enter`
+      (continues a list/fence) and `Backspace` (deletes markup) live even with the flag off (measured
+      2026-10-06, SPEC §10.1), so ⌘B still not inserting bold is the thing to prove, and structural
+      continuation is not a failure.
+- [ ] **Check that a code block can actually be created through the toolbar.** Measured 2026-10-06:
+      hand-typing a fence fights the editor's auto-close — three backticks insert a matching run, so text
+      typed "inside" lands on the same line, producing an unclosed fence that swallows the rest of the
+      document (Enter then grows the block, and there is no "outside" to click into). The package's
+      `actions.codeBlock` is the intended route and this phase wires it; until then there is no
+      frictionless way to make a valid block, which is why Phase 5's fenced-code clause moved here.
 
 **Verification**
 - Every action in the list is exercised once and produces the expected markdown in the source.
@@ -514,6 +646,26 @@ verified, not assumed.*
 - [ ] `bun run type-check` + `bun run test` clean (a bare `tsc --noEmit` cannot pass here — SPEC
       §15.15); storybook only where CODE_STYLE §14 requires it.
 - [ ] `bun run build:canary` → `electrobun run` on the built app; decide `bundleCEF` per OS.
+- [ ] **Remove the SPEC §10.6 wedge diagnostics at MVP completion** (`HEARTBEAT=1` hash stream and
+      `POKE=1` native poke). Added 2026-10-06 as provisional instrumentation for the `debug.md`
+      investigation; the ruling was "permanent until MVP is complete", so their removal is this
+      phase's job, not a leftover's. While they live, `debug.md` §0 is their recipe.
+- [ ] **Give notes a way to be found on disk.** Measured 2026-10-06: the app's own author could not
+      locate two freshly created notes. The data lives at
+      `~/Library/Application Support/com.example.notes/<channel>/notebook/` — under a **hidden**
+      `~/Library`, keyed by user *and* channel, with the filename being the **slug** of the title
+      (lowercase, `[a-z0-9]` only), never the title as typed. Decide: a Reveal-in-Finder action (note
+      row or status-bar path), or a documented location, or accept it explicitly.
+- [ ] **Make `deleteNote` reachable, or drop it.** It is wired end to end (schema → handler →
+      `services/notes.service.ts`) and **nothing in the renderer calls it** — §10.2 gives the notes
+      list no context menu — yet this phase's own verification expects "deleting a note … produce[s]
+      a visible message". One of the two statements has to give.
+- [ ] **Give failure messages context.** A refused mutation currently renders the bare §9.1 string —
+      the same day's session surfaced only `not found` when `+` aimed a draft at a folder that no
+      longer existed. The message should name the thing that failed (id, folder, or action).
+- [ ] **Decide what a draft does when its target folder vanishes** (it captures the selected folder
+      when `+` is pressed; if that folder is gone, the create fails with the bare `not found` above,
+      and because the selection went stale the list looks empty too).
 
 **Verification**
 - Deleting a note, deleting a non-empty folder, and reading a note that vanished underneath the app

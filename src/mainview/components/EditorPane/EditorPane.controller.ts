@@ -78,6 +78,12 @@ export const useEditorPaneController = (): EditorPaneController => {
   const [isDraft, setDraft] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * A note or a draft is open — the pane has a title to show and a body worth showing. The component
+   * hides the editor host while this is false, so an empty pane cannot be typed into (§10.1).
+   */
+  const hasDocument = isDraft || noteId !== null;
+
   const clearTimer = useCallback((): void => {
     if (timerRef.current === null) return;
     clearTimeout(timerRef.current);
@@ -287,6 +293,17 @@ export const useEditorPaneController = (): EditorPaneController => {
   }, [theme]);
 
   /**
+   * The host is hidden whenever nothing is open, and the editor is created while it is hidden — so
+   * its first measurements are zero. CodeMirror's own observer fires when the container changes
+   * size, but the swap back to visible is cheap to ask for explicitly, and a view measured at 0×0
+   * is exactly how a caret or selection ends up drawn in the wrong place.
+   */
+  useEffect(() => {
+    if (!hasDocument) return;
+    editorRef.current?.view.requestMeasure();
+  }, [hasDocument]);
+
+  /**
    * SPEC §10.1/§10.6's dev-only read-back: bun tells the view which channel it is running in (a
    * fire-and-forget push is only safe after the view announced itself, §15.21), and only `dev`
    * publishes the handle — that is the only way any probe can read or drive this editor.
@@ -394,7 +411,7 @@ export const useEditorPaneController = (): EditorPaneController => {
     isDraft,
     isDirty,
     noteId,
-    hasDocument: isDraft || noteId !== null,
+    hasDocument,
     error,
     handleTitleChange: setTitle,
     handleCommitTitle,

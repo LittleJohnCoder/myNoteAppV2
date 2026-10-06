@@ -686,17 +686,39 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   typed into the editor.
 - **Focus.** `+` puts the caret in the title input; opening an existing note puts it in the body, line 1.
   The focused line renders raw Markdown; all other lines render.
+- **Empty state — no body when there is nothing to edit.** With no note open *and* no draft, the pane
+  shows the empty-state message (`#editor-placeholder`) and the body is **not shown**. The editor element
+  stays mounted — the CodeMirror view is created into it once — but hidden, so an empty pane cannot be
+  typed into. That closes a measured hole (2026-10-06): with the body visible in that state, keystrokes
+  were accepted by the DOM and silently dropped, because the controller only saves when a note is bound
+  or a draft is active. `#editor-pane[data-body-visible]` is the rendered truth of this (§10.6), and the
+  body is re-measured when it is revealed — a view created while hidden has zero metrics, which is how a
+  caret or selection ends up drawn in the wrong place.
 - Code highlighting is the hybrid package's bundled CodeMirror languages (Lezer): the package has **no**
   Prism dependency, so "Prism" is not the mechanism and prismjs is not added (§2).
-- Task list items render as clickable checkboxes; toggling writes back to source.
-- Collapsible headings (H1–H3).
+- Task list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` in the **source**.
+  **Pinned 2026-10-06:** the toggle is an ordinary edit — it saves through the same path as typing (500 ms
+  debounce, blur flush, `data-dirty` true meanwhile) and pushes `noteChanged` like any other successful
+  write, because that is what it is. *Reason:* one write mechanism, one set of failure modes, and §9.1's
+  accepted quit-inside-the-window loss then applies uniformly. *Beat:* an immediate save on toggle (a
+  second write path for one discrete action) and a view-only toggle (which would leave the list's preview
+  and mtime stale).
+- Collapsible headings (H1–H3). **Pinned 2026-10-06:** the state is **ephemeral** — never written to the
+  file, and not preserved across a note switch or a reload; returning to a note shows everything expanded.
+  *Reason:* it is view state for the open document, held per view by the package. *Beat:* persisting
+  collapse per note — new state and a new storage decision for a convenience nobody asked to keep.
 - `$$ … $$` → KaTeX. ` ```mermaid ` fences → Mermaid diagrams. Both are always-on features of the hybrid
   package — there are no KaTeX/mermaid options to pass (§2).
-- Formatting is **toolbar-only** — no Markdown shortcuts. Enforced by composing the editor with
-  `enableKeymap: false`: the package's formatting keybindings (Ctrl+B/I/K…) are **on by default**, so
-  without that flag this line and Phase 7's ⌘B check are both false. (OS edit accelerators
-  still work via the ApplicationMenu roles in §5; that is not a formatting
-  shortcut and must stay.)
+- **Formatting is toolbar-only — no Markdown *formatting* shortcuts.** Enforced by composing the editor
+  with `enableKeymap: false`: the package's formatting keybindings (Ctrl+B/I/K…) are **on by default**,
+  so without that flag this line and Phase 7's ⌘B check are both false. **Corrected 2026-10-06 (measured
+  in the package source):** that flag gates *the hybrid package's own* keymap only. `markdown()` from
+  `@codemirror/lang-markdown` installs its `markdownKeymap` at high precedence regardless — `Enter` =
+  `insertNewlineContinueMarkup` and `Backspace` = `deleteMarkupBackward` — so two **structural** keybinds
+  are live and cannot be switched off through `enableKeymap`. They are conveniences (a list or fence
+  continues on Enter; markup deletes on Backspace), not formatting, and the rule above is about
+  formatting. (OS edit accelerators still work via the ApplicationMenu roles in §5; that is not a
+  formatting shortcut and must stay.)
 - Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list,
   Task list, Quote, Code, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against
   the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code). Math has **no**
@@ -709,7 +731,8 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   the toggle to be followed without a stale half-dark surface, and the initial value alone cannot
   satisfy it. Phase 6 still owns proving it end to end with the rest of the rendering.
 - **Dev-only read-back (testability).** The pane exposes the view on `window.__notesEditor` when the
-  channel is `dev`, and renders `#editor-pane[data-note-id][data-dirty][data-draft]`. A DOM-only probe
+  channel is `dev`, and renders `#editor-pane[data-note-id][data-dirty][data-draft][data-body-visible]`. A
+  DOM-only probe
   cannot read this editor — its document lives in `EditorState`, not in the DOM — so these are the
   handles Phase 5's checks drive and read (§15.22).
   The channel is **not** a build flag: `import.meta.env.DEV` is false under `bun start`, which is the run
@@ -832,15 +855,32 @@ removes the element rather than hiding it.
 visible fields: the probe asserts three fields at once, and reading them off `textContent` would tie a
 check to label punctuation. The values are the *rendered* strings, so the no-note state reads `—`.
 
-**Editor.** `#editor-pane` (`data-note-id`, `data-dirty`, `data-draft`), `#editor-placeholder` (the
-no-note empty state), `#title-input`, `#editor-error` (the pane's own failure surface — the sidebar's
-`#mutation-error` is scoped to the sidebar) and `window.__notesEditor` (§10.1) — the view handle, without
-which no check can read or drive the editor.
+**Editor.** `#editor-pane` (`data-note-id`, `data-dirty`, `data-draft`, `data-body-visible`),
+`#editor-placeholder` (the no-note empty state), `#title-input`, `#editor-error` (the pane's own failure
+surface — the sidebar's `#mutation-error` is scoped to the sidebar) and `window.__notesEditor` (§10.1) —
+the view handle, without which no check can read or drive the editor. `data-body-visible` is `"true"`
+exactly when a note or a draft is open (§10.1), and exists so a check can assert that the empty state
+has **no** body to type into without reading a computed style or trusting `data-draft`/`data-note-id` to
+agree with the rendering.
 
 `#edit-probe` is **retired** in Phase 5, as todo.md's Phase 5 says: the editor's body is now the editable
 target, so the ⌘C/⌘V/⌘Z manual check (Phase 4's item 5) is run against the editor body from Phase 5 on.
 The protocol stays editable — `#title-input` is a plain `<input>`, and the editor body is a
 contenteditable — so nothing about the check changes except which element it is pointed at.
+
+**Rendered content (Phase 6's contract — added 2026-10-06).** The hybrid package renders markdown into its
+own DOM inside `.cm-content`, and Phase 6's checks assert *what is rendered* — so these strings are pinned
+here rather than invented in a probe. Every one is a name the pinned package
+(`codemirror-markdown-hybrid@1.2.2`) emits, so a package upgrade that renames one is a contract change:
+task-list items render as `.md-list-item` with `.md-list-marker` and a real `<input type="checkbox">`
+(`lib/utils/markdown.js:128`); a heading's collapse control is `.cm-collapse-toggle`, and a collapsed line
+carries `.cm-collapsed-line`; rendered math is `.cm-math-preview` / `.cm-math-block-line`; a mermaid
+diagram is `.cm-mermaid-preview` / `.cm-mermaid-block-line`; generic rendered markdown is
+`.cm-markdown-preview`, with `.cm-heading-preview` for headings and `.cm-table-preview` for tables. A
+check reads the **presence** of these, never their styling — with **one deliberate exception**, pinned
+2026-10-06: Phase 6's theme-follows check compares a single computed colour before and after the toggle
+(§10.1), because presence cannot fail there — a stale half-dark preview has every element present. Elsewhere
+colours are the package's theme layer, and §10.5 keeps the app's own theme to a single attribute.
 
 **Theme.** `document.documentElement[data-theme]` — the single attribute the shell writes, and the only
 theme state a check may read (no per-component JS theme branching, §10.5).
