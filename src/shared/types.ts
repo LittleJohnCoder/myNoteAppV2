@@ -114,8 +114,13 @@ export type NotesRPC = {
        * — `import.meta.env.DEV` is false in exactly the run the dev probe uses (`bun start` loads
        * the built view), so the dev-only editor handle needs the answer from the side that knows it
        * (SPEC §10.1, §15.7).
+       *
+       * `heartbeat` carries the `HEARTBEAT=1` switch (SPEC §10.6). It rides this push rather than
+       * a URL query parameter because the `views://` handler's treatment of queries is unmeasured,
+       * and this is the channel that already exists for "the main process tells the view what it
+       * needs to know".
        */
-      viewContext: { channel: string };
+      viewContext: { channel: string; heartbeat: boolean };
     };
   }>;
 };

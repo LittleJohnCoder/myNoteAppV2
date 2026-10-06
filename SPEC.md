@@ -848,6 +848,17 @@ theme state a check may read (no per-component JS theme branching, §10.5).
 **Class naming.** BEM, `block__element` plus an `_active` modifier, with the tree keeping its `tree__*`
 prefix. Pinned because the probe's selectors and `styles.css` both depend on the exact strings.
 
+**Wedge diagnostics — dev-only and env-gated (`debug.md`).** Two channels exist so that a lost transport can
+be told apart from a suspended page, and neither is DOM-shaped: with `HEARTBEAT=1` the view writes a changing
+`location.hash` every 5 s (the preload turns `hashchange` into `did-navigate-in-page`) and bun logs each one as
+`[hash] …`; with `POKE=1` bun fires `BrowserView.executeJavascript` — the **native** channel, no WebSocket — at
+the page every 10 s. Both are gated on `channel === "dev"` **and** the env switch, so an ordinary run carries no
+extra traffic and a packaged build cannot reach either. A heartbeat that stops while the process lives means the
+page itself stopped running; one that continues while RPC is dead means only the socket is gone. The switch
+travels on `viewContext.heartbeat` (§7) rather than a URL query parameter, because the `views://` handler's
+treatment of query strings is unmeasured. Both channels are provisional instrumentation: they exist to diagnose
+the wedge and retire when the MVP is complete.
+
 ---
 
 ## 11. Markdown feature matrix
