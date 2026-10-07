@@ -37,9 +37,36 @@ declare module "codemirror-markdown-hybrid" {
   export function getTheme(view: EditorView): HybridMarkdownTheme;
   export function getMode(view: EditorView): HybridMarkdownMode;
 
-  /** `bold`, `italic`, `strikethrough`, `h1`–`h3`, `link`, `image`, `bulletList`, `numberedList`,
-   *  `taskList`, `inlineCode`, `codeBlock`, `hr`, `quote`, `table`, `diagram`, `emoji`. */
-  export const actions: Record<string, (view: EditorView) => void>;
+  /**
+   * The keys of the package's own action map, measured from the installed package
+   * (`Object.keys(actions)` — 18 keys; `alert` is **not** one of them, it appears in that file only
+   * inside `codeBlock`'s sample string).
+   *
+   * Named as a type, not left as `string`, so the toolbar's dispatch is checked against the package:
+   * a button whose id is not one of these fails `tsc` instead of reaching
+   * `actions[id]` as `undefined` and silently doing nothing (SPEC §10.1's one-vocabulary rule).
+   */
+  export type PackageActionKey =
+    | "bold"
+    | "italic"
+    | "strikethrough"
+    | "h1"
+    | "h2"
+    | "h3"
+    | "link"
+    | "image"
+    | "bulletList"
+    | "numberedList"
+    | "taskList"
+    | "inlineCode"
+    | "codeBlock"
+    | "hr"
+    | "quote"
+    | "table"
+    | "diagram"
+    | "emoji";
+
+  export const actions: Record<PackageActionKey, (view: EditorView) => void>;
 
   export const hybridPreview: (options?: { enableCollapse?: boolean }) => Extension;
   export const markdownKeymap: Extension;

@@ -18,6 +18,7 @@ import {
 import { runPhase4Probe } from "./phase4Probe";
 import { runPhase5Probe } from "./phase5Probe";
 import { runPhase6Probe } from "./phase6Probe";
+import { runPhase7Probe } from "./phase7Probe";
 import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
@@ -285,14 +286,21 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
 
   await phase3Done;
 
-  // `PROBE6_ONLY=1` runs just the Phase 6 probe. Phase 4 and Phase 5 hold the window for minutes
-  // each and the transport has been measured to go quiet mid-run, so iterating on Phase 6's own
-  // checks through the full suite is unaffordable; the boot smoke still runs first, because it
-  // asserts *exact* note-id sets and would see Phase 6's fixture appear underneath it.
+  // `PROBE6_ONLY=1` runs the Phase 6 probe alone and `PROBE7_ONLY=1` the Phase 7 one. Phase 4 and
+  // Phase 5 hold the window for minutes each and the transport has been measured to go quiet
+  // mid-run, so iterating on a later phase's own checks through the full suite is unaffordable; the
+  // boot smoke still runs first, because it asserts *exact* note-id sets and would otherwise see
+  // these probes' fixtures appear underneath it.
+  //
+  // Skipping phases 4–6 is also what makes Phase 7's empty-state check measurable at all: every
+  // button is `disabled` only while nothing is open, and this app has no way back to that state
+  // (see `phase7Probe.ts`'s header), so a fresh window is the only place to read it.
   const onlyPhase6 = process.env.PROBE6_ONLY === "1";
+  const onlyPhase7 = process.env.PROBE7_ONLY === "1";
   if (onlyPhase6) console.log("[bun] PROBE6_ONLY=1 — running the Phase 6 probe alone");
+  if (onlyPhase7) console.log("[bun] PROBE7_ONLY=1 — running the Phase 7 probe alone");
 
-  if (!onlyPhase6) {
+  if (!onlyPhase6 && !onlyPhase7) {
     await runPhase4Probe({
       dir: NOTEBOOK_DIR,
       evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
@@ -308,8 +316,18 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
   }
 
   // Phase 6 drives the rendered markdown inside the same mounted editor (task checkboxes, collapse,
-  // math, mermaid, code, live theme), so it runs last and after the editor is warm.
-  await runPhase6Probe({
+  // math, mermaid, code, live theme), so it runs after them and on a warm editor.
+  if (!onlyPhase7) {
+    await runPhase6Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+  }
+
+  // Phase 7 drives the toolbar, which is enabled by an open note rather than by a warm editor — it
+  // opens its own fixture, so it runs last and independent of the four phases above.
+  await runPhase7Probe({
     dir: NOTEBOOK_DIR,
     evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
     pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),

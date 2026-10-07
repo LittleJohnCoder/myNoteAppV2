@@ -731,10 +731,19 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   *Reason:* one vocabulary — `Object.keys(actions)` is the list by name, so no id→action table can drift.
   *Beat:* kebab ids (`bullet-list`) plus a mapping table: a second name for every action, the drift class
   that already produced `NoteList`/`NotesPanel` and "hybrid / split / raw".
-  **Math** inserts the **block** form by hand — `$$`, a blank line, `$$`, with the caret on the blank line —
-  because a math block is a line whose trimmed text is exactly `$$` (§10.6, Phase 6 Outcome): a one-line
-  `$$…$$` renders as literal text. (This corrects the earlier "inserts `$$…$$`" wording, which could not
-  render.)
+  **Math** inserts the **block** form by hand — `$$`, a line holding **one space**, `$$`, with the caret at
+  the start of that middle line — because a math block is a line whose trimmed text is exactly `$$` (§10.6,
+  Phase 6 Outcome): a one-line `$$…$$` renders as literal text. (This corrects the earlier "inserts `$$…$$`"
+  wording, which could not render.)
+  **Corrected again 2026-10-06 (Phase 7, measured):** that middle line holds one space, not nothing. The
+  package's math plugin replaces every line between the delimiters with
+  `Decoration.replace({}).range(line.from, line.to)`, and CodeMirror throws
+  `Invalid range for replacement decoration` for an **empty** range — so a block whose middle line is empty
+  throws from inside the very transaction that would render it, whenever no line of the block holds the
+  focus, which is exactly the state a toolbar click starts from. The throw leaves the widget missing and
+  takes every later math render in that view with it (measured: the same bytes render `math-preview=1`
+  opened from disk, and render `0` after one such insertion). One space keeps the range legal, is invisible
+  in the file, and the user's first keystroke lands before it.
   **Two obligations the toolbar's controller carries, pinned here because Phase 7's checks assert them:**
   each handler reads the view **at click time** through the accessor below and dispatches
   `actions[key](view)` before calling `view.focus()` (the button took focus and the user's next act is

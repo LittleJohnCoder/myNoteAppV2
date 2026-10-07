@@ -695,11 +695,14 @@ gone.
 *Deps: 5 (actions need a mounted view). Mechanical but broad — its own phase so each action is
 verified, not assumed.*
 
-*Status: **ready to start — pre-flighted 2026-10-06.** Deps are green (nothing to install: the toolbar needs
-the editor Phase 5 mounted and the package's `actions` map, both already present). The pre-flight closed
-three gaps — the view plumbing, the probe contract, and a prose verification — and the decisions below are
-**pinned, not open**: implement them as written, because the checks cannot be judged without them. The same
-rules appear in contract form at SPEC §10.1 (the toolbar) and §10.6 (the hooks).*
+*Status: **done — 6/6 tasks, 20/20 readings** (2026-10-06, macOS arm64, `electrobun@1.18.1`): a
+`PROBE7_ONLY=1` run read all 20 ok with 0 FAIL — that is where line 13 is measured, on a fresh window — and
+a full-suite run read **74 ok, 0 FAIL** (17 smoke + 20 Phase 4 + 11 Phase 5 + 7 Phase 6 + 19 Phase 7), with
+line 13's precondition line standing in for a pass it did not measure. One measured correction to decision 4
+(an inserted math block's middle line holds a space, not nothing) and one run precondition for line 13; both
+are recorded below and in `lessons.md`. The pre-flight's three gaps — the view plumbing, the probe contract
+and a prose verification — were closed as stated; the decisions below were implemented as written except
+where the run proved a correction. See **Outcome** under Verification for the reproduced lines.*
 
 *Files:* `src/mainview/components/Toolbar/{Toolbar.tsx, Toolbar.controller.ts, Toolbar.types.ts,
 Toolbar.constants.ts}` — the controller is new (today the component is a static list with no logic);
@@ -734,10 +737,18 @@ component keeps `role="toolbar"` and gains `#toolbar` (§10.6).
    the button took the focus and the user's next act is typing. *Beat:* leaving focus on the button, where
    the next keystroke is lost. Order matters and is fine: the click's blur flushes the pending save (§9.1),
    then the dispatch starts a fresh 500 ms debounce for the new text.
-4. **`math` inserts the block form by hand:** `$$`, a blank line, `$$`, with the caret on the blank line.
-   *Reason:* a math block is a line whose trimmed text is exactly `$$`; a one-line `$$…$$` renders as
-   literal text (§10.6, Phase 6 Outcome). *Beat:* inserting `$$…$$` — what §10.1 said before this
-   pre-flight, and it cannot render.
+4. **`math` inserts the block form by hand:** `$$`, a line holding one space, `$$`, with the caret at the
+   start of that middle line. *Reason:* a math block is a line whose trimmed text is exactly `$$`; a
+   one-line `$$…$$` renders as literal text (§10.6, Phase 6 Outcome). *Beat:* inserting `$$…$$` — what
+   §10.1 said before this pre-flight, and it cannot render.
+   **Corrected while running this phase (2026-10-06, measured) — the middle line holds one space, not
+   nothing.** As first pinned (`$$`, a *blank* line, `$$`), the inserted block made the package's math
+   plugin throw `Invalid range for replacement decoration` (`Decoration.replace({}).range(from, from)` on
+   the empty line) from inside the insertion transaction, because no line of the block holds the focus when
+   a toolbar button is clicked — and the throw left math rendering dead for the rest of the view: the same
+   bytes opened from disk read `math-preview=1` before that insertion and `0` after it. One space keeps the
+   replacement range legal, is invisible in the file, and the caret still lands where the formula goes. See
+   SPEC §10.1 and `lessons.md`.
 5. **The preview-mode button's source of truth is the view** (`getMode(view)`, read at click time), not a
    store, with `data-mode` on the button. *Reason:* per-view state the package owns — the same ruling
    §10.1 makes for collapse. *Beat:* a Zustand mirror that can disagree with the view, and persisting a
@@ -751,24 +762,32 @@ component keeps `role="toolbar"` and gains `#toolbar` (§10.6).
    (`wrapSelection`, `setHeading`); it is illustrative, not the rule (SPEC wins the precedence chain; the
    sample was corrected 2026-10-06).
 
-- [ ] `Toolbar.constants.ts`: the package-key ids, the Code block button, the preview-mode button, labels per
-      §10.1, and no `PLACEHOLDER_TOOLTIP`.
-- [ ] `Toolbar.controller.ts` (`useToolbarController`): one handler per action — `actions[key](getView())`
+- [x] `Toolbar.constants.ts`: the package-key ids, the Code block button, the preview-mode button, labels per
+      §10.1, and no `PLACEHOLDER_TOOLTIP`. *(19 buttons: the 17 package keys + `math` + `preview-mode`.)*
+- [x] `Toolbar.controller.ts` (`useToolbarController`): one handler per action — `actions[key](getView())`
       followed by `view.focus()` (decision 3) — with `math` inserted by hand in the block form (decision 4)
       and the preview-mode handler reading `getMode(view)` and calling `setMode(view, …)` (decision 5).
-- [ ] `Toolbar.tsx`: `#toolbar`, `disabled={!isEnabled}`, `data-action="<id>"` on every button, `data-mode`
+      *(checks 1a–9. The mode is *read back from the view* after the dispatch that changes it, so the
+      button's `data-mode` is a rendering of the view's own answer — check 11 reads it flipping both ways.)*
+- [x] `Toolbar.tsx`: `#toolbar`, `disabled={!isEnabled}`, `data-action="<id>"` on every button, `data-mode`
       and `aria-pressed` on the preview-mode button. No store imports and no `window.__notesEditor`.
-- [ ] `EditorPane.controller.ts` exposes `getView` over the handle it already owns, and `EditorPane.tsx`
+- [x] `EditorPane.controller.ts` exposes `getView` over the handle it already owns, and `EditorPane.tsx`
       passes `getView` + `isEnabled={hasDocument}` into `<Toolbar />` (decision 2).
-- [ ] Confirm **no markdown *formatting* keybinds** are live — a behavioural proof, not new work (Phase 5's
+- [x] Confirm **no markdown *formatting* keybinds** are live — a behavioural proof, not new work (Phase 5's
       `enableKeymap: false` line, and the reason it exists). Note what is *not* gated and cannot be:
       `@codemirror/lang-markdown`'s `markdownKeymap` keeps `Enter` (continues a list/fence) and `Backspace`
       (deletes markup) live even with the flag off (measured 2026-10-06, SPEC §10.1), so **⌘B still not
       inserting bold** is the thing to prove, and structural continuation is not a failure.
-- [ ] **Prove a code block can be created from the toolbar.** `actions.codeBlock` is the frictionless route
+      *(check 14, as a pair: a bare `Enter` **grows** the document — so the harness is proven to deliver
+      keydowns to CodeMirror's keymap — while both the ⌘B and ⌃B variants leave it byte-identical and add no
+      `**`. The ApplicationMenu half of the line stays manual, as its parenthetical says.)*
+- [x] **Prove a code block can be created from the toolbar.** `actions.codeBlock` is the frictionless route
       (measured 2026-10-06: hand-typing a fence fights the editor's auto-close — three backticks insert a
       matching run, so text typed "inside" lands on the same line and the fence never closes, swallowing the
       rest of the document). This is why Phase 5's fenced-code clause moved into this phase.
+      *(checks 7a/7b: the button's own payload is asserted byte for byte — a closed ```javascript fence with
+      the caret at `from + 4` — and with a selection the selection is fenced instead. Phase 6's check 6 owns
+      the claim that such a block then highlights.)*
 
 **Verification** — automated through `phase7Probe.ts` unless marked *(manual)*. The probe opens a note first
 (buttons are `disabled` without one), drives each button by `#toolbar [data-action="…"]`, and reads the
@@ -799,8 +818,11 @@ both reported success.
 8. `hr` inserts `\n\n---\n` after the caret's line; `table` inserts the package's 3-column sample after it;
    `diagram` inserts its `flowchart LR` mermaid sample. *(Each asserts the payload text, not just a prefix,
    and Phase 6's check 5 owns proving the fence then renders.)*
-9. `math` inserts `$$` / blank / `$$` with the caret on the blank middle line, and typing a formula there
-   renders `.cm-math-preview` (the rendering itself is Phase 6's check 4).
+9. `math` inserts `$$` / **one space** / `$$` with the caret at the start of that middle line, and typing a
+   formula there renders `.cm-math-preview` (the rendering itself is Phase 6's check 4). *(Reworded
+   2026-10-06 while running the phase: the middle line holds a space, not nothing — a blank one makes the
+   package's math plugin throw and takes math rendering down with it. See decision 4 and SPEC §10.1. The
+   probe asserts the document byte for byte, space included.)*
 10. Every action also works from a **collapsed caret on an empty note** — the insert path, not only the wrap
     path — and after the whole sweep the document holds exactly one of each construct, with no duplicated
     prefixes. *(The sweep is what catches an action that shares state with another.)*
@@ -812,6 +834,77 @@ both reported success.
     document, and the notebook gains no file.
 14. ⌘B in the body inserts **no** bold markup (no keybinds, §10.1). *(manual for the menu half: the
     accelerators belong to the ApplicationMenu — Phase 2's check — so this line covers the editor's keymap.)*
+
+**Outcome — 2026-10-06. 20 readings, 0 failures.** Verbatim from the `PROBE7_ONLY=1` run
+(`HEARTBEAT=1 POKE=1 PROBE7_ONLY=1 bun start`, macOS arm64) — the run shape that also carries line 13, since
+it starts on a window with nothing open:
+
+```
+[probe7] 13 ok — buttons=19 all-disabled=true changed-by-click=[] doc="" notes=3 unchanged=true
+[probe7] 1a ok — no-selection="
+
+****alpha\n" caret=2 between-pair=true | with-selection="**alpha**\n" selected="alpha"
+[probe7] 1b ok — no-selection="__alpha\n" caret=1 between-pair=true | with-selection="_alpha_\n" selected="alpha"
+[probe7] 1c ok — no-selection="~~~~alpha\n" caret=2 between-pair=true | with-selection="~~alpha~~\n" selected="alpha"
+[probe7] 1d ok — no-selection="``alpha\n" caret=1 between-pair=true | with-selection="`alpha`\n" selected="alpha"
+[probe7] 2 ok — h1→"# plain line\n" h1→"plain line\n" h2→"## plain line\n" h1→"# plain line\n"
+[probe7] 3 ok — bulletList→"- item\n" bulletList→"item\n" numberedList→"1. item\n" bulletList→"- item\n" taskList→"- [ ] item\n" duplicated-prefix=false
+[probe7] 4 ok — no-selection="[link text](https://example.com)alpha\n" selected="link text" | with-selection="[alpha](https://example.com)\n" selected="https://example.com"
+[probe7] 5 ok — doc="![alt text](https://placehold.co/400x200)alpha\n" selected="alt text"
+[probe7] 6 ok — once="> quoted\n" twice="> > quoted\n"
+[probe7] 7a ok — doc="```javascript\nfunction hello() {\n  alert(\"hello world\");\n}\nhello();\n```alpha\n" caret=4
+[probe7] 7b ok — doc="```\nalpha\n```\n" caret=4
+[probe7] 8a ok — doc="alpha\n\n---\n\n"
+[probe7] 8b ok — doc="alpha\n\n| Column 1 | Column 2 | Column 3 |\n|----------|----------|----------|\n| Cell 1   | Cell 2   | Cell 3   |\n| Cell 4   | Cell 5   | Cell 6   |\n\n"
+[probe7] 8c ok — doc="alpha\n\n```mermaid\nflowchart LR\n    A[Start] --> B[Process]\n    B --> C{Decision}\n    C -->|Yes| D[Result 1]\n    C -->|No| E[Result 2]\n```\n\n"
+[probe7] 9 ok — placed="alpha\n\n$$\n \n$$\n\n" caret=10 middle-line=" " at-line-start=true typed="alpha\n\n$$\ne^{i\\pi}+1=0 \n$$\n\n" math-preview=1 katex=1 | control-opened=true control-math-preview=1
+[probe7] 10 ok — actions=18 no-growth=[] bad-markers=[] duplicated-prefixes=[] unexpected-lines=[] lines=43
+[probe7] 11 ok — mode=hybrid→raw→hybrid rendered=2→0→2 aria-pressed=false→true→false doc-unchanged=true
+[probe7] 12 ok — mode-during-save=raw dirty=true file="typed before the switch\n" doc-after-switch-back="typed before the switch\n"
+[probe7] 14 ok — enter-control="\nalpha\n" grew=true | mod-b="alpha\n" ctrl-b="alpha\n" unchanged=true no-bold-markup=true
+[probe7] done — 0 failure(s), 0 precondition(s); fixture removed
+```
+
+The full-suite run (`HEARTBEAT=1 POKE=1 bun start`) reads the same 19 lines, with line 13 replaced by its
+precondition, and every channel green:
+
+```
+[smoke] done — 0 failure(s); notebook cleared (checks 1–17 done, 18 is `bun run test`)
+[probe] done — 0 failure(s); fixture removed
+[probe5] done — 0 failure(s); fixture removed
+[probe6] done — 0 failure(s); fixture removed
+[probe7] done — 0 failure(s), 1 precondition(s); fixture removed
+```
+
+74 ok lines, 0 FAIL together (17 smoke + 20 Phase 4 + 11 Phase 5 + 7 Phase 6 + 19 Phase 7). Alongside:
+`bun run test` **95 pass / 0 fail / 200 expect() calls** and `bun run type-check` **0 project errors** (6
+electrobun-internal quarantined). The notebook is empty afterwards (`Probe7/` is removed in `finally`).
+
+**Three readings a later reader must not have to re-derive** (all measured while running this phase):
+
+- **Line 13 is a boot-state check, and the state is unreachable after boot.** `disabled` tracks
+  `hasDocument`, and nothing in the renderer returns the app to "no note and no draft": selecting a note is
+  one-way, `+` starts a draft (a draft *is* a document), and there is no delete-note affordance — the only
+  `selectNote(null)` is `handleStartDraft`. So the probe reads it **before** opening anything, and when a
+  document is already open (a full-suite run, where Phase 6 has left one) it prints
+  `[probe7] 13 precondition — NOT MEASURED: …` and names `PROBE7_ONLY=1` instead of reporting a pass. A
+  silent skip would have read as a pass; this line cannot be faked either way.
+- **The `math` action inserts a space as the middle line of its block** (decision 4's correction, measured;
+  `lessons.md` has the full entry). As first pinned, the *blank* middle line made the package's math plugin
+  throw `Invalid range for replacement decoration` from inside the insertion transaction — no line of the
+  block holds the focus when a toolbar button is clicked — and the throw left math rendering dead for the
+  rest of that view: check 9's control (the same bytes opened from disk) read `math-preview=1` before such
+  an insertion and `0` after it, in the same run. One space keeps the range legal and is invisible; check 9
+  now asserts the doc byte for byte, space included, and both the typed block and the control render.
+- **The four wrap actions' markers are the package's, not the app's**: `**`/`_`/`~~` /`` ` ``, each wrapping
+  with the caret between the pair when there is no selection (checked as `caret = marker.length`) and
+  keeping the selection selected when there is one. Line 6's `> > ` is the package always *prepending*, not
+  a toggle — the line asserts measured behaviour, not a specification.
+
+**Two probe fixes this phase's own runs forced**, both in `phase7Probe.ts`: a failed read now lands in a
+check's `observed` as "not observed" via `readObject` (check 10 first threw `undefined is not an object`
+instead), and every check is given a 200 ms beat — this probe fires reads far faster than the phases that
+drive the real UI, and the transport is measured to go quiet on long chatty runs (`lessons.md`).
 
 ## Phase 8 — Polish, guardrails, and packaging
 

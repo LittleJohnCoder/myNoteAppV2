@@ -24,6 +24,11 @@ export interface EditorPaneController {
   noteId: string | null;
   /** A note or a draft is open — the title field and the body have something to show (§10.1). */
   hasDocument: boolean;
+  /**
+   * The editor view, by accessor — what the toolbar dispatches against (§10.1). A value would be
+   * `null` at the toolbar's first render, since the view is created in this hook's mount effect.
+   */
+  getView: () => EditorView | null;
   error: string | null;
   handleTitleChange: (value: string) => void;
   handleCommitTitle: (options: { moveToBody: boolean }) => void;
@@ -83,6 +88,13 @@ export const useEditorPaneController = (): EditorPaneController => {
    * hides the editor host while this is false, so an empty pane cannot be typed into (§10.1).
    */
   const hasDocument = isDraft || noteId !== null;
+
+  /**
+   * SPEC §10.1: the toolbar reaches the editor through the pane, never through the dev handle
+   * (`window.__notesEditor` is dev-only, §10.6). A callback rather than the value, because the view
+   * does not exist yet on the toolbar's first render.
+   */
+  const getView = useCallback((): EditorView | null => editorRef.current?.view ?? null, []);
 
   const clearTimer = useCallback((): void => {
     if (timerRef.current === null) return;
@@ -412,6 +424,7 @@ export const useEditorPaneController = (): EditorPaneController => {
     isDirty,
     noteId,
     hasDocument,
+    getView,
     error,
     handleTitleChange: setTitle,
     handleCommitTitle,

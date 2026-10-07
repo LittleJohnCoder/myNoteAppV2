@@ -32,6 +32,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({ className }) => {
     isDirty,
     noteId,
     hasDocument,
+    getView,
     error,
     handleTitleChange,
     handleCommitTitle,
@@ -47,7 +48,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({ className }) => {
       data-draft={isDraft ? "true" : "false"}
       data-body-visible={hasDocument ? "true" : "false"}
     >
-      <Toolbar />
+      <Toolbar getView={getView} isEnabled={hasDocument} />
       {hasDocument && (
         <TitleInput
           value={title}
