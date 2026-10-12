@@ -250,9 +250,31 @@ export const runPhase4Probe = async ({
   evaluate,
   pushNoteChanged,
 }: Phase4ProbeContext): Promise<void> => {
+  /**
+   * Every request gets its own deadline (debug.md §6). Without it a wedged channel costs whatever
+   * Electrobun's own `maxRequestTime` happens to do — measured at ~10 s per read, so ~2.5 min per
+   * remaining check, and on the E1 runs it hung for good. 8 s mirrors `phase5Probe`, and the
+   * rejection lands in the same `threw …` channel the call sites already understand, so a wedge
+   * becomes "the view did not answer", not a phantom product failure.
+   */
+  const withDeadline = async (script: string): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const guard = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("the view did not answer within 8s — the channel is wedged")),
+        8_000,
+      );
+    });
+    try {
+      return await Promise.race([evaluate(script), guard]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  };
+
   const read = async (script: string): Promise<unknown> => {
     try {
-      return await evaluate(script);
+      return await withDeadline(script);
     } catch (error) {
       return `threw ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -298,11 +320,19 @@ export const runPhase4Probe = async ({
     }
   };
 
-  /** Waits for the view to catch up with a mutation, then reads — a fixed sleep would be a guess. */
+  /**
+   * Waits for the view to catch up with a mutation, then reads — a fixed sleep would be a guess.
+   *
+   * A read that failed is returned **immediately**: a wedged channel cannot start answering because
+   * we waited longer, and without this the loop would spend its whole 5 s deadline polling a dead
+   * transport once per 100 ms. The caller then fails on a `threw …` string, which is the honest
+   * outcome — a void check, not a product failure (debug.md E7).
+   */
   const readEventually = async (script: string, matches: (value: unknown) => boolean): Promise<unknown> => {
     const deadline = Date.now() + 5_000;
     let value = await read(script);
     while (!matches(value) && Date.now() < deadline) {
+      if (typeof value === "string" && value.startsWith("threw ")) return value;
       await sleep(100);
       value = await read(script);
     }

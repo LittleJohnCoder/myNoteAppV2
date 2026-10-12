@@ -200,6 +200,20 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
+**Identity is a placeholder and must change before the first packaged build** (Phase 9's first decision;
+pin recorded 2026-10-07). `app.name` / `app.identifier` above (`Notes` / `com.example.notes`) are
+placeholders, and the identifier is load-bearing in two places that do **not** follow the dev tree:
+`Utils.paths.userData` is `getAppDataDir()/identifier/channel`, so the notebook directory moves with it, and
+the `views://` origin that holds `localStorage` (the theme, §10.5) changes with it too. A canary build
+therefore starts with no notes and no stored theme — expected, and worth knowing before it is mistaken for a
+broken package. *Beat:* keeping the placeholder, which lets two apps — or two channels — share one data
+directory and one notebook.
+
+**`bundleCEF: false` on all three OSes is the pinned ruling** (Phase 9 pre-flight, 2026-10-07): the app
+ships the platform's native webview, not CEF (§15.10). CEF is a *different transport*, and the native one is
+what `debug.md`'s wedge lives in — so flipping `mac.bundleCEF` to `true` is the first experiment if that
+wedge is ever traced to the transport, not a config value to change casually.
+
 `build.bun` and `build.views` accept the full Bun.build option set (plugins,
 external, minify, splitting, define, jsx, …); Electrobun controls the entrypoints,
 outdir and target itself.[3]
@@ -445,6 +459,12 @@ export type NotesRPC = {
       openNote:      { params: { id: string };                      response: NoteMeta | null };
       saveNote:      { params: { id: string; content: string };     response: SaveNoteResult };
       createNote:    { params: { folder: string; title: string };   response: CreateNoteResult };
+      // Phase 8 pre-flight, pinned 2026-10-07 — **not yet in the tree**. The note list's context menu
+      // (§10.2) surfaces the note's own file so a user can find it in the OS file manager; the reason is
+      // measured (lessons.md: the app's author could not locate two freshly created notes). The path is
+      // resolved in bun from the same `NOTEBOOK_DIR` and validated exactly like `openNote`'s id, so the
+      // renderer never holds an absolute path and an id that resolves outside the notebook is refused.
+      revealNote:    { params: { id: string };                      response: MutationResult };
       deleteNote:    { params: { id: string };                      response: MutationResult };
       createFolder:  { params: { parent: string; name: string };    response: CreateFolderResult };
       deleteFolder:  { params: { path: string };                    response: MutationResult };
@@ -576,6 +596,11 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   `not found`, `invalid id`, `invalid name`, `already exists`, `folder not empty`. Reads
   (`getAllNotes`, `getFolders`, `openNote`) return data and use `null` for absence; only genuine bugs
   reject.
+  **Phase 8 pre-flight, pinned 2026-10-07:** those five strings are a **contract** — a small, closed
+  vocabulary the bun layer returns and the renderer maps. The user-facing wording lives in the renderer
+  (`src/mainview/utils/mutationMessage.ts`), where a code plus its subject becomes a sentence; the layer
+  never grows prose-shaped error strings, and a check asserts the code (`#toast[data-message]`, §10.6)
+  rather than the punctuation.
 - **Path safety.** An `id` must be `/`-separated, non-empty, not absolute, free of any `..` segment, and
   after `resolve()` against `NOTEBOOK_DIR` — symlinks included — still inside it. Anything else →
   `{ ok: false, error: "invalid id" }`. Ids are **rejected, never silently normalised**: a normalised id
@@ -686,30 +711,94 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   typed into the editor.
 - **Focus.** `+` puts the caret in the title input; opening an existing note puts it in the body, line 1.
   The focused line renders raw Markdown; all other lines render.
+- **Empty state — no body when there is nothing to edit.** With no note open *and* no draft, the pane
+  shows the empty-state message (`#editor-placeholder`) and the body is **not shown**. The editor element
+  stays mounted — the CodeMirror view is created into it once — but hidden, so an empty pane cannot be
+  typed into. That closes a measured hole (2026-10-06): with the body visible in that state, keystrokes
+  were accepted by the DOM and silently dropped, because the controller only saves when a note is bound
+  or a draft is active. `#editor-pane[data-body-visible]` is the rendered truth of this (§10.6), and the
+  body is re-measured when it is revealed — a view created while hidden has zero metrics, which is how a
+  caret or selection ends up drawn in the wrong place.
 - Code highlighting is the hybrid package's bundled CodeMirror languages (Lezer): the package has **no**
   Prism dependency, so "Prism" is not the mechanism and prismjs is not added (§2).
-- Task list items render as clickable checkboxes; toggling writes back to source.
-- Collapsible headings (H1–H3).
+- Task list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` in the **source**.
+  **Pinned 2026-10-06:** the toggle is an ordinary edit — it saves through the same path as typing (500 ms
+  debounce, blur flush, `data-dirty` true meanwhile) and pushes `noteChanged` like any other successful
+  write, because that is what it is. *Reason:* one write mechanism, one set of failure modes, and §9.1's
+  accepted quit-inside-the-window loss then applies uniformly. *Beat:* an immediate save on toggle (a
+  second write path for one discrete action) and a view-only toggle (which would leave the list's preview
+  and mtime stale).
+- Collapsible headings (H1–H3). **Pinned 2026-10-06:** the state is **ephemeral** — never written to the
+  file, and not preserved across a note switch or a reload; returning to a note shows everything expanded.
+  *Reason:* it is view state for the open document, held per view by the package. *Beat:* persisting
+  collapse per note — new state and a new storage decision for a convenience nobody asked to keep.
 - `$$ … $$` → KaTeX. ` ```mermaid ` fences → Mermaid diagrams. Both are always-on features of the hybrid
   package — there are no KaTeX/mermaid options to pass (§2).
-- Formatting is **toolbar-only** — no Markdown shortcuts. Enforced by composing the editor with
-  `enableKeymap: false`: the package's formatting keybindings (Ctrl+B/I/K…) are **on by default**, so
-  without that flag this line and Phase 7's ⌘B check are both false. (OS edit accelerators
-  still work via the ApplicationMenu roles in §5; that is not a formatting
-  shortcut and must stay.)
-- Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list,
-  Task list, Quote, Code, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against
-  the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code). Math has **no**
-  package action: it inserts `$$…$$` by hand (§2).
+- **Formatting is toolbar-only — no Markdown *formatting* shortcuts.** Enforced by composing the editor
+  with `enableKeymap: false`: the package's formatting keybindings (Ctrl+B/I/K…) are **on by default**,
+  so without that flag this line and Phase 7's ⌘B check are both false. **Corrected 2026-10-06 (measured
+  in the package source):** that flag gates *the hybrid package's own* keymap only. `markdown()` from
+  `@codemirror/lang-markdown` installs its `markdownKeymap` at high precedence regardless — `Enter` =
+  `insertNewlineContinueMarkup` and `Backspace` = `deleteMarkupBackward` — so two **structural** keybinds
+  are live and cannot be switched off through `enableKeymap`. They are conveniences (a list or fence
+  continues on Enter; markup deletes on Backspace), not formatting, and the rule above is about
+  formatting. (OS edit accelerators still work via the ApplicationMenu roles in §5; that is not a
+  formatting shortcut and must stay.)
+- Toolbar: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list, Task list, Quote, Code,
+  Code block, Link, Image, Table, Divider, Math, Mermaid — each button dispatching against the package's
+  `actions` map. **Phase 7 pre-flight, pinned 2026-10-06:** a button's `id` **is** the package's action key.
+  The map's 18 keys (measured by importing the installed package — `Object.keys(actions)`, not by grep:
+  `alert` appears in that file only inside `codeBlock`'s sample string and is **not** an action) are
+  `bold italic strikethrough h1 h2 h3 link image bulletList numberedList taskList inlineCode codeBlock hr
+  quote table diagram emoji`. Buttons are those 17 the list above names — `hr` = Divider, `diagram` =
+  Mermaid, `inlineCode` = Code — **plus** `math`, which has no package key; labels keep the spec's words.
+  The package's `emoji` action is deliberately unused (no button, and this list never had one).
+  *Reason:* one vocabulary — `Object.keys(actions)` is the list by name, so no id→action table can drift.
+  *Beat:* kebab ids (`bullet-list`) plus a mapping table: a second name for every action, the drift class
+  that already produced `NoteList`/`NotesPanel` and "hybrid / split / raw".
+  **Math** inserts the **block** form by hand — `$$`, a line holding **one space**, `$$`, with the caret at
+  the start of that middle line — because a math block is a line whose trimmed text is exactly `$$` (§10.6,
+  Phase 6 Outcome): a one-line `$$…$$` renders as literal text. (This corrects the earlier "inserts `$$…$$`"
+  wording, which could not render.)
+  **Corrected again 2026-10-06 (Phase 7, measured):** that middle line holds one space, not nothing. The
+  package's math plugin replaces every line between the delimiters with
+  `Decoration.replace({}).range(line.from, line.to)`, and CodeMirror throws
+  `Invalid range for replacement decoration` for an **empty** range — so a block whose middle line is empty
+  throws from inside the very transaction that would render it, whenever no line of the block holds the
+  focus, which is exactly the state a toolbar click starts from. The throw leaves the widget missing and
+  takes every later math render in that view with it (measured: the same bytes render `math-preview=1`
+  opened from disk, and render `0` after one such insertion). One space keeps the range legal, is invisible
+  in the file, and the user's first keystroke lands before it.
+  **Two obligations the toolbar's controller carries, pinned here because Phase 7's checks assert them:**
+  each handler reads the view **at click time** through the accessor below and dispatches
+  `actions[key](view)` before calling `view.focus()` (the button took focus and the user's next act is
+  typing); and every button is `disabled` exactly while no note and no draft is open — with nothing bound
+  there is nothing to format, and the click's blur is what flushes a pending save (§9.1) before the new
+  500 ms debounce starts.
+- **The toolbar reaches the editor through the pane, never through the dev handle.** `EditorPane` passes
+  `<Toolbar />` two props: `getView: () => EditorView | null` — an accessor over the handle the pane already
+  owns — and `isEnabled` (= the pane's `hasDocument`). *Reason:* the view is created in a mount effect
+  **after** the toolbar's first render, so a value prop is `null` at that point and only an unrelated
+  re-render would fix it. *Beat:* a store holding the view (a non-serializable object in global state —
+  `store/theme.ts` is deliberately DOM-free so `bun test` can load it) and reading `window.__notesEditor`,
+  which is dev-only (§10.1) and would make shipped code depend on a probe handle.
 - Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`). The package has no
-  split-preview mode, so the earlier "split" wording is withdrawn.
+  split-preview mode, so the earlier "split" wording is withdrawn. **Phase 7 pre-flight, pinned
+  2026-10-06:** it is a toolbar button (`data-action="preview-mode"`), the **mode's source of truth is the
+  view** (`getMode(view)`, read at click time like every other handler) rather than a store — per-view state
+  the package owns, the same ruling as collapse above — and the button carries `data-mode`
+  (`"hybrid"` | `"raw"`) so a check reads the mode instead of parsing a label. Switching mode reconfigures
+  extensions only: the document is untouched, so unsaved text stays in the editor and its 500 ms save still
+  lands. *Beat:* a Zustand mirror that can disagree with the view, and persisting a mode nothing asked to
+  reopen in.
 - Theme: light/dark through the package's `theme` option, with `setTheme(view, theme)` for live switching;
   §10.5 keeps the store the single source. **Phase 5 wires the live switch, not just the initial value**
   (the pane applies the store's theme to the view on every change): Phase 5's manual check 13 asks for
   the toggle to be followed without a stale half-dark surface, and the initial value alone cannot
   satisfy it. Phase 6 still owns proving it end to end with the rest of the rendering.
 - **Dev-only read-back (testability).** The pane exposes the view on `window.__notesEditor` when the
-  channel is `dev`, and renders `#editor-pane[data-note-id][data-dirty][data-draft]`. A DOM-only probe
+  channel is `dev`, and renders `#editor-pane[data-note-id][data-dirty][data-draft][data-body-visible]`. A
+  DOM-only probe
   cannot read this editor — its document lives in `EditorState`, not in the DOM — so these are the
   handles Phase 5's checks drive and read (§15.22).
   The channel is **not** a build flag: `import.meta.env.DEV` is false under `bun start`, which is the run
@@ -727,6 +816,13 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 - Context menu on folders: New Subfolder, Rename Folder, Delete Folder (only
   when empty). Counts, search scope, drag-and-drop and the theme have their
   semantics pinned in §10.5.
+- **Context menu on notes (Phase 8 pre-flight, pinned 2026-10-07).** Note rows get the same menu shape as
+  folders, with two items: **Delete note**, confirming first through the package's own message box
+  (`Utils.showMessageBox`, measured present in `electrobun@1.18.1`), and **Reveal in Finder**, which calls
+  §7's `revealNote` and hands the absolute path to `Utils.showItemInFolder`. Nothing else joins it — rename
+  is post-MVP (§14), and anything that edits the note belongs in the editor, not the list. `deleteNote` has
+  been wired end to end since Phase 3 with no caller; this menu is what makes it reachable, and it is why
+  Phase 8's checks can assert a visible message for a delete at all.
 
 ### 10.3 Layout & status bar
 - Sidebar + editor pane (~1200 px target width).
@@ -800,17 +896,20 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   rather than the name it sent.
 - **Drafts are invisible to the sidebar.** The notes list shows notes; a draft is not one until it
   materialises.
-- **Toolbar and status bar in Phase 4 are placeholders.** The toolbar renders its action buttons
-  disabled with a tooltip; the status bar renders `—` per field. Phase 4's acceptance is the shell and
-  the sidebar; those two components get their behaviour in Phases 5–7.
+- **Toolbar and status bar in Phase 4 were placeholders** — historical, and retired: the toolbar's
+  always-disabled tooltip state (`PLACEHOLDER_TOOLTIP`) and its behaviour landed in Phase 7, the status
+  bar's in Phase 5. Phase 4's acceptance was the shell and the sidebar, and those two components got their
+  behaviour in Phases 5–7. The wording is kept because Phase 4's checks still read against it.
 
 ### 10.6 Dev-only observation surface (the probe contract)
 
 Every automated check in `todo.md` reads the renderer through the DOM, and this app's editor keeps its
 document outside the DOM — so the hooks below **are** the verification contract, not incidental markup. They
 are additive: no styling or behaviour may depend on them, and a check that needs a new hook adds it here
-first. Everything listed exists in the committed tree except the three marked *(Phase 5)*; a rename of any of
-these strings is a contract change, not a refactor.
+first. Each block below is labelled with the phase that added it, and a label reading *(Phase N)* names a
+**contract pinned before that phase's code** — its checks are written against these names rather than
+invented ones, and the phase that implements it commits the code, not the names. A rename of any of these
+strings is a contract change, not a refactor.
 
 **Shell.** `#shell` carries its own state as data attributes, which is why a probe can assert the app's
 selection without reading React state: `data-selected-folder` (`""` = All Notes), `data-selected-note`
@@ -832,21 +931,71 @@ removes the element rather than hiding it.
 visible fields: the probe asserts three fields at once, and reading them off `textContent` would tie a
 check to label punctuation. The values are the *rendered* strings, so the no-note state reads `—`.
 
-**Editor.** `#editor-pane` (`data-note-id`, `data-dirty`, `data-draft`), `#editor-placeholder` (the
-no-note empty state), `#title-input`, `#editor-error` (the pane's own failure surface — the sidebar's
-`#mutation-error` is scoped to the sidebar) and `window.__notesEditor` (§10.1) — the view handle, without
-which no check can read or drive the editor.
+**Editor.** `#editor-pane` (`data-note-id`, `data-dirty`, `data-draft`, `data-body-visible`),
+`#editor-placeholder` (the no-note empty state), `#title-input`, `#editor-error` (the pane's own failure
+surface — the sidebar's `#mutation-error` is scoped to the sidebar) and `window.__notesEditor` (§10.1) —
+the view handle, without which no check can read or drive the editor. `data-body-visible` is `"true"`
+exactly when a note or a draft is open (§10.1), and exists so a check can assert that the empty state
+has **no** body to type into without reading a computed style or trusting `data-draft`/`data-note-id` to
+agree with the rendering.
 
 `#edit-probe` is **retired** in Phase 5, as todo.md's Phase 5 says: the editor's body is now the editable
 target, so the ⌘C/⌘V/⌘Z manual check (Phase 4's item 5) is run against the editor body from Phase 5 on.
 The protocol stays editable — `#title-input` is a plain `<input>`, and the editor body is a
 contenteditable — so nothing about the check changes except which element it is pointed at.
 
+**Toolbar (Phase 7's contract — added 2026-10-06).** `#toolbar` on the container (which already carries
+`role="toolbar"`), one `button.toolbar__button` per action, each carrying a `data-action` attribute whose
+value is the package's action key for a mapped button, with `math` and `preview-mode` for the two buttons that
+are not package actions (§10.1); the `disabled` **property** while no note and no draft is open; and
+`data-mode` (`"hybrid"` | `"raw"`) plus `aria-pressed` on the preview-mode button. A check selects an action
+**by name** — `#toolbar [data-action="bold"]` — never by index or label: this phase's own list gains Code
+block, and `Code` is a prefix of `Code block`, so a `textContent` match cannot tell the two apart.
+
+**Shell failure surface and empty states (Phase 8's contract — pinned 2026-10-07, not yet in the tree).**
+`#toast` is the app's only failure surface. It exists only while a message is up; it carries `data-tone`
+(`"error"` | `"info"`) and `data-message` (the §9.1 code being reported, so a check asserts the mapping and
+not the wording), its text names the subject that failed, and an error is announced with `role="alert"`.
+Empty states are one primitive carrying a **reason**: `#notes-empty` also carries `data-empty-reason` —
+`"no-notes"` (the notebook holds none), `"folder-empty"` (the selected folder holds none) or
+`"no-matches"` (the search matched none) — because the copy and the "create your first note" affordance
+differ per case while the element does not.
+
+**First paint (same phase).** `index.html` resolves the stored theme *before* the bundle runs, so the
+`data-theme` value written by the shell (§10.5's theme rule, and the **Theme.** rule below) is already the
+user's at the first readable instant, and the shell's effect writes only when the value differs. A reader may
+therefore read the attribute before mount and mean something by it.
+
+**Rendered content (Phase 6's contract — added 2026-10-06).** The hybrid package renders markdown into its
+own DOM inside `.cm-content`, and Phase 6's checks assert *what is rendered* — so these strings are pinned
+here rather than invented in a probe. Every one is a name the pinned package
+(`codemirror-markdown-hybrid@1.2.2`) emits, so a package upgrade that renames one is a contract change:
+task-list items render as `.md-list-item` with `.md-list-marker` and a real `<input type="checkbox">`
+(`lib/utils/markdown.js:128`); a heading's collapse control is `.cm-collapse-toggle`, and a collapsed line
+carries `.cm-collapsed-line`; rendered math is `.cm-math-preview` / `.cm-math-block-line`; a mermaid
+diagram is `.cm-mermaid-preview` / `.cm-mermaid-block-line`; generic rendered markdown is
+`.cm-markdown-preview`, with `.cm-heading-preview` for headings and `.cm-table-preview` for tables. A
+check reads the **presence** of these, never their styling — with **one deliberate exception**, pinned
+2026-10-06: Phase 6's theme-follows check compares a single computed colour before and after the toggle
+(§10.1), because presence cannot fail there — a stale half-dark preview has every element present. Elsewhere
+colours are the package's theme layer, and §10.5 keeps the app's own theme to a single attribute.
+
 **Theme.** `document.documentElement[data-theme]` — the single attribute the shell writes, and the only
 theme state a check may read (no per-component JS theme branching, §10.5).
 
 **Class naming.** BEM, `block__element` plus an `_active` modifier, with the tree keeping its `tree__*`
 prefix. Pinned because the probe's selectors and `styles.css` both depend on the exact strings.
+
+**Wedge diagnostics — dev-only and env-gated (`debug.md`).** Two channels exist so that a lost transport can
+be told apart from a suspended page, and neither is DOM-shaped: with `HEARTBEAT=1` the view writes a changing
+`location.hash` every 5 s (the preload turns `hashchange` into `did-navigate-in-page`) and bun logs each one as
+`[hash] …`; with `POKE=1` bun fires `BrowserView.executeJavascript` — the **native** channel, no WebSocket — at
+the page every 10 s. Both are gated on `channel === "dev"` **and** the env switch, so an ordinary run carries no
+extra traffic and a packaged build cannot reach either. A heartbeat that stops while the process lives means the
+page itself stopped running; one that continues while RPC is dead means only the socket is gone. The switch
+travels on `viewContext.heartbeat` (§7) rather than a URL query parameter, because the `views://` handler's
+treatment of query strings is unmeasured. Both channels are provisional instrumentation: they exist to diagnose
+the wedge and retire when the MVP is complete.
 
 ---
 
@@ -864,6 +1013,15 @@ prefix. Pinned because the probe's selectors and `styles.css` both depend on the
 | `$$…$$` math | yes | yes | KaTeX |
 | Mermaid fences | yes | yes | diagrams |
 | Wikilinks / backlinks | — | — | post-MVP |
+
+**One accepted limitation (Phase 8 pre-flight, pinned 2026-10-07): a Mermaid diagram does not follow
+`data-theme`.** Measured in Phase 6: `codemirror-markdown-hybrid@1.2.2` calls `mermaid.initialize` once at
+import with hardcoded **light** theme variables (`primaryColor #f5f5f5`, `edgeLabelBackground #fff`,
+`lineColor #aaa`) and exposes no option for them, so a diagram renders light-ish inside a dark pane while
+everything else follows `<html data-theme>`. The alternative — reaching into the package's own `mermaid`
+instance, re-initialising it per theme and re-rendering the open note's diagrams — is post-MVP (§14), not a
+Phase 8 task: the theme rule covers the hybrid preview, which does follow. Phase 8's job is to say so here,
+in one place, rather than leave it to be rediscovered as a bug.
 
 ---
 
@@ -913,7 +1071,9 @@ id, and the selection, the notes list and any open editor must all follow the ne
 reason it is deferred.
 
 Wikilinks + backlinks, tag system, Markdown keyboard shortcuts, graph view,
-export to HTML/PDF.
+export to HTML/PDF. Plus two the MVP accepts explicitly rather than fixes: **Mermaid diagrams following the
+theme** (§11's accepted limitation) and **code signing / notarization** (§15.10; an unsigned local launch is
+what Phase 9 checks).
 
 ---
 
@@ -950,7 +1110,12 @@ export to HTML/PDF.
 9. **Paths.** Writable data → `Utils.paths.userData`[8]; read-only bundles →
    `PATHS.VIEWS_FOLDER` / `PATHS.RESOURCES_FOLDER`[7]. Never write to `views/`.
 10. **Packaging.** `electrobun build --env=canary|stable`; per-OS `bundleCEF`
-    controls whether CEF ships with the app.[3][12][13] v1 also exposes
+    controls whether CEF ships with the app.[3][12][13] This app pins `false` on all three OSes (§4.1), and
+    a packaged build is **launched from its own path**, never through the CLI's `run` command: `run` calls
+    `runApp`, which hardcodes `buildEnvironment = "dev"` (`src/cli/index.ts`, measured 2026-10-07), so it can
+    only ever start `build/dev-<os>-<arch>/Notes-dev.app`. Canary output lands in
+    `build/canary-<os>-<arch>/Notes-canary.app` (`getPlatformPrefix` = `${env}-${os}-${arch}`,
+    `getAppFileName` = `<name>-<env>`). v1 also exposes
     build-only fields such as `useAsar`, `asarUnpack` and `bunVersion`.[3]
 11. **Watch mode's coverage is narrower than "watches view sources" suggests — measured.**
     `electrobun dev --watch` prints the roots it watches at startup: on this config exactly

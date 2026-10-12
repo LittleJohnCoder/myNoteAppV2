@@ -32,6 +32,7 @@ export const EditorPane: React.FC<EditorPaneProps> = ({ className }) => {
     isDirty,
     noteId,
     hasDocument,
+    getView,
     error,
     handleTitleChange,
     handleCommitTitle,
@@ -45,8 +46,9 @@ export const EditorPane: React.FC<EditorPaneProps> = ({ className }) => {
       data-note-id={noteId ?? ""}
       data-dirty={isDirty ? "true" : "false"}
       data-draft={isDraft ? "true" : "false"}
+      data-body-visible={hasDocument ? "true" : "false"}
     >
-      <Toolbar />
+      <Toolbar getView={getView} isEnabled={hasDocument} />
       {hasDocument && (
         <TitleInput
           value={title}
@@ -62,7 +64,19 @@ export const EditorPane: React.FC<EditorPaneProps> = ({ className }) => {
             No note open — choose one from the list, or press + to start a new note.
           </p>
         )}
-        <div className="editor__host" ref={hostRef} data-editor-host="true" />
+        {/*
+          Mounted always, hidden when there is nothing to edit. Unmounting it would destroy the
+          CodeMirror view — the controller creates it once, into this element — so the pane would
+          have no editor when a note opens later. `display: none` keeps the instance alive, takes the
+          field out of sight and out of the tab order, and closes a measured hole: with the body
+          visible in the empty state, keystrokes were ignored by the controller and silently
+          discarded (2026-10-06) — a field that looked usable and could not hold anything.
+        */}
+        <div
+          className={cx("editor__host", !hasDocument && "editor__host_hidden")}
+          ref={hostRef}
+          data-editor-host="true"
+        />
       </div>
       {error && (
         <p className="editor__error" id="editor-error" role="alert">

@@ -17,6 +17,8 @@ import {
 } from "./notes";
 import { runPhase4Probe } from "./phase4Probe";
 import { runPhase5Probe } from "./phase5Probe";
+import { runPhase6Probe } from "./phase6Probe";
+import { runPhase7Probe } from "./phase7Probe";
 import { runPhase3Smoke } from "./smoke";
 
 // Keep in step with vite.config.ts `server.port`.
@@ -53,6 +55,25 @@ async function resolveViewUrl(channel: string): Promise<string> {
 
 const channel = await Updater.localInfo.channel();
 const viewUrl = await resolveViewUrl(channel);
+
+/**
+ * SPEC §10.6's dev-only diagnostic channels (debug.md's X1/X4/X6, all added for the wedge
+ * investigation). Both are gated **twice** — the `dev` channel *and* an explicit env switch — so a
+ * normal probe run carries no extra traffic and a packaged build can never reach either of them.
+ *
+ *   - `HEARTBEAT=1` → the view writes a changing `location.hash` every 5 s; the preload turns that
+ *     into `did-navigate-in-page`, which is logged here as `[hash] …`. Hashes that stop while the
+ *     process lives mean the page itself stopped running (suspension); hashes that continue while
+ *     RPC is dead mean only the socket is gone. That is X1's discriminator, automated.
+ *   - `POKE=1` → bun fires the **native** `executeJavascript` channel (no WebSocket involved) every
+ *     10 s. With the heartbeat off, this is the only way to ask a wedged page whether it is alive:
+ *     the poke either produces a hash or it does not.
+ */
+const heartbeatEnabled = channel === "dev" && process.env.HEARTBEAT === "1";
+const pokeEnabled = channel === "dev" && process.env.POKE === "1";
+
+/** The last `[hash]` value logged — see the listener below for why repeats are dropped. */
+let lastHash = "";
 
 /**
  * SPEC §5, §15.8: clipboard/undo/select-all reach the webview only through the application
@@ -176,6 +197,35 @@ mainWindow.webview.on("did-navigate", (event) => {
 });
 
 /**
+ * The `[hash]` line (SPEC §10.6). The preload emits `did-navigate-in-page` on `hashchange`, and its
+ * payload is the view's **href string** — so the hash is the last `#` segment. Only hash-carrying
+ * updates are logged: a bare `views://mainview/index.html` is every ordinary load, and logging it
+ * would bury the heartbeat in boot noise.
+ *
+ * This listener is what makes debug.md's experiments observable at all. It was retired with the
+ * Phase 2 probe, which is why X1's read-back had nothing to read.
+ */
+mainWindow.webview.on("did-navigate-in-page", (event) => {
+  const detail = (event as { data?: { detail?: unknown } } | null)?.data?.detail;
+  const href = typeof detail === "string" ? detail : "";
+  const hash = href.includes("#") ? href.slice(href.indexOf("#") + 1) : "";
+  // One line per *changed* value: the preload emits this event on `hashchange` **and** `popstate`, so
+  // a single hash write arrives 2–3 times (measured). Logging each occurrence buries the cadence —
+  // which is the one thing the heartbeat is read for.
+  if (hash === "" || hash === lastHash) return;
+  lastHash = hash;
+  console.log(`[hash] ${hash}`);
+});
+
+// X1's native channel: fire-and-forget, no WebSocket. See the flags above.
+if (pokeEnabled) {
+  console.log("[bun] POKE=1 — poking the view through the native channel every 10s");
+  setInterval(() => {
+    mainWindow.webview.executeJavascript(`location.hash='poke-'+Date.now()`);
+  }, 10_000);
+}
+
+/**
  * The Phase 3 boot smoke (todo.md): dev only, and temporary. It drives the notes-layer barrel
  * (checks 1–13) and this file's handler map (checks 14–17) against the real `NOTEBOOK_DIR`, so the
  * wiring is proven, not assumed. Its promise is awaited before the Phase 4 probe starts — both
@@ -221,7 +271,7 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
   // SPEC §7/§10.1: which channel this window is in, before any probe runs. The renderer cannot work
   // this out for itself — `import.meta.env.DEV` is false under `bun start`, which is exactly the run
   // the dev probe uses — so the dev-only editor handle is gated on this answer.
-  rpc.send.viewContext({ channel });
+  rpc.send.viewContext({ channel, heartbeat: heartbeatEnabled });
 
   if (channel !== "dev") return;
 
@@ -236,14 +286,48 @@ async function handleViewReady({ url }: { url: string }): Promise<void> {
 
   await phase3Done;
 
-  await runPhase4Probe({
-    dir: NOTEBOOK_DIR,
-    evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
-    pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
-  });
+  // `PROBE6_ONLY=1` runs the Phase 6 probe alone and `PROBE7_ONLY=1` the Phase 7 one. Phase 4 and
+  // Phase 5 hold the window for minutes each and the transport has been measured to go quiet
+  // mid-run, so iterating on a later phase's own checks through the full suite is unaffordable; the
+  // boot smoke still runs first, because it asserts *exact* note-id sets and would otherwise see
+  // these probes' fixtures appear underneath it.
+  //
+  // Skipping phases 4–6 is also what makes Phase 7's empty-state check measurable at all: every
+  // button is `disabled` only while nothing is open, and this app has no way back to that state
+  // (see `phase7Probe.ts`'s header), so a fresh window is the only place to read it.
+  const onlyPhase6 = process.env.PROBE6_ONLY === "1";
+  const onlyPhase7 = process.env.PROBE7_ONLY === "1";
+  if (onlyPhase6) console.log("[bun] PROBE6_ONLY=1 — running the Phase 6 probe alone");
+  if (onlyPhase7) console.log("[bun] PROBE7_ONLY=1 — running the Phase 7 probe alone");
 
-  // Phase 5 drives the mounted editor, so it needs Phase 4 to have left a live, unchanged window.
-  await runPhase5Probe({
+  if (!onlyPhase6 && !onlyPhase7) {
+    await runPhase4Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+
+    // Phase 5 drives the mounted editor, so it needs Phase 4 to have left a live, unchanged window.
+    await runPhase5Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+  }
+
+  // Phase 6 drives the rendered markdown inside the same mounted editor (task checkboxes, collapse,
+  // math, mermaid, code, live theme), so it runs after them and on a warm editor.
+  if (!onlyPhase7) {
+    await runPhase6Probe({
+      dir: NOTEBOOK_DIR,
+      evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
+      pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),
+    });
+  }
+
+  // Phase 7 drives the toolbar, which is enabled by an open note rather than by a warm editor — it
+  // opens its own fixture, so it runs last and independent of the four phases above.
+  await runPhase7Probe({
     dir: NOTEBOOK_DIR,
     evaluate: (script) => rpc.request.evaluateJavascriptWithResponse({ script }),
     pushNoteChanged: (id, updatedAt) => rpc.send.noteChanged({ id, updatedAt }),

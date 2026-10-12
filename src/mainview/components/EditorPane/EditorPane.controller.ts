@@ -24,6 +24,11 @@ export interface EditorPaneController {
   noteId: string | null;
   /** A note or a draft is open — the title field and the body have something to show (§10.1). */
   hasDocument: boolean;
+  /**
+   * The editor view, by accessor — what the toolbar dispatches against (§10.1). A value would be
+   * `null` at the toolbar's first render, since the view is created in this hook's mount effect.
+   */
+  getView: () => EditorView | null;
   error: string | null;
   handleTitleChange: (value: string) => void;
   handleCommitTitle: (options: { moveToBody: boolean }) => void;
@@ -77,6 +82,19 @@ export const useEditorPaneController = (): EditorPaneController => {
   const [noteId, setNoteId] = useState<string | null>(null);
   const [isDraft, setDraft] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * A note or a draft is open — the pane has a title to show and a body worth showing. The component
+   * hides the editor host while this is false, so an empty pane cannot be typed into (§10.1).
+   */
+  const hasDocument = isDraft || noteId !== null;
+
+  /**
+   * SPEC §10.1: the toolbar reaches the editor through the pane, never through the dev handle
+   * (`window.__notesEditor` is dev-only, §10.6). A callback rather than the value, because the view
+   * does not exist yet on the toolbar's first render.
+   */
+  const getView = useCallback((): EditorView | null => editorRef.current?.view ?? null, []);
 
   const clearTimer = useCallback((): void => {
     if (timerRef.current === null) return;
@@ -287,6 +305,17 @@ export const useEditorPaneController = (): EditorPaneController => {
   }, [theme]);
 
   /**
+   * The host is hidden whenever nothing is open, and the editor is created while it is hidden — so
+   * its first measurements are zero. CodeMirror's own observer fires when the container changes
+   * size, but the swap back to visible is cheap to ask for explicitly, and a view measured at 0×0
+   * is exactly how a caret or selection ends up drawn in the wrong place.
+   */
+  useEffect(() => {
+    if (!hasDocument) return;
+    editorRef.current?.view.requestMeasure();
+  }, [hasDocument]);
+
+  /**
    * SPEC §10.1/§10.6's dev-only read-back: bun tells the view which channel it is running in (a
    * fire-and-forget push is only safe after the view announced itself, §15.21), and only `dev`
    * publishes the handle — that is the only way any probe can read or drive this editor.
@@ -394,7 +423,8 @@ export const useEditorPaneController = (): EditorPaneController => {
     isDraft,
     isDirty,
     noteId,
-    hasDocument: isDraft || noteId !== null,
+    hasDocument,
+    getView,
     error,
     handleTitleChange: setTitle,
     handleCommitTitle,

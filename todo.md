@@ -15,6 +15,17 @@ House style: `CODE_STYLE.md` — carried over from the v1 repo and reconciled wi
   anything, confirm the app actually launched and is alive, that the built bundle is newer than the
   source you edited (`Resources/app/bun/index.js` vs `src/bun/index.ts`), and that your change is
   present in it (`grep` for it). A launch that died and a stale bundle look exactly like a no-op edit.
+- **Running a phase's verification** (stated here because `lessons.md` and `debug.md` are gitignored — a
+  fresh clone has neither). Launch from the checkout: `bun start` builds the renderer, then runs
+  `electrobun dev`. `PROBE_SKIP=1` gives a quiet dev window with no probes — the shape a *manual* check
+  needs; `PROBE6_ONLY=1` runs the Phase 6 probe alone (Phase 5 splits its own with `PROBE5_PART=1|2`, and
+  later phases add their own switch), because the probes hold the window for minutes and the transport has
+  been measured to go quiet mid-run. Before any run that asserts exact
+  sets, the notebook must be **empty**: `~/Library/Application Support/com.example.notes/dev/notebook/`
+  (hidden, per-user, keyed by identifier **and** channel) — the Phase 3 smoke *skips* a non-empty notebook
+  and a skip reads like a pass. `HEARTBEAT=1 POKE=1` add the wedge diagnostics (§10.6) to the log. Kill
+  stale apps first — they share one notebook: `pkill -f "Notes-dev.app/Contents/MacOS"` — and click the dev
+  window once after it appears (a dev page nobody has touched has been measured to freeze).
 - Phases are sequential unless a phase says otherwise. Dependencies are stated explicitly — the v1
   roadmap died mid-file at Phase 7 with 6 phases unchecked, so nothing here is left implied.
 
@@ -31,9 +42,12 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` verified
   which the §10.2 folder context menu has always needed. Mutations return the
   `{ ok, …payload, error? }` envelope and never throw for an expected failure (SPEC §9.1). Ids change
   on move/rename, so the renderer re-keys from `newId` / `changedIds` instead of reusing the old id.
-- Editing is **toolbar-only** (no markdown keybinds) — enforced by the editor package's
-  `enableKeymap: false`, which is on by default (SPEC §2, §10.1); OS edit accelerators come from
-  `ApplicationMenu`.
+- Editing is **toolbar-only for *formatting*** — no markdown formatting shortcuts. `enableKeymap: false`
+  (the package's own default is *on*) gates the hybrid package's keymap and only that: `markdown()` from
+  `@codemirror/lang-markdown` still installs its `markdownKeymap` at high precedence, so `Enter`
+  (`insertNewlineContinueMarkup`) and `Backspace` (`deleteMarkupBackward`) are live and cannot be gated
+  this way. Measured in the package source 2026-10-06; SPEC §10.1 records the correction. OS edit
+  accelerators come from `ApplicationMenu`.
 - House style: controllers + `use<X>Controller()`, Zustand for shared state, plain CSS + `cx()`,
   `@/*` → `src/mainview/`. No Tailwind, no TanStack Query, no `cn()`.
 - Versions are part of the contract (SPEC §2): `react`/`react-dom` `^18.3.1`, `zustand` `^5.0.15`,
@@ -328,12 +342,16 @@ Toolbar,StatusBar,Loading,EditorPane,FolderNameInput,FolderContextMenu}/`.
 - [x] Drag a note onto a folder → `moveNote`; re-key the list and the selection from the returned
       `newId`; a drop on the note's current folder is a no-op; a failure reverts the row.
 - [x] Retire the Phase 2 DOM probe: `src/bun/domProbe.ts` is **deleted**, and `src/bun/phase4Probe.ts` runs
-      after the Phase 3 smoke in `bun start` (§15.22). The `#edit-probe` textarea **stays** — it is the only
-      channel for the ⌘C/⌘V/⌘Z manual check (SPEC §10.6).
+      after the Phase 3 smoke in `bun start` (§15.22). **Corrected 2026-10-06:** Phase 5 retired that
+      textarea (it is no longer in the tree); the ⌘C/⌘V/⌘Z manual check now targets the editor body
+      itself, as Phase 4's manual item 5 and SPEC §10.6 record.
 - [x] The tree's flattening helper (`flattenFolderPaths`) is gone; `utils/folderTree.ts` exports
       `ancestorFolderPaths` + `noteCountsByFolder` instead, which is what the tree and the counts use.
 
-**Verification** — automated half reproduced 2026-10-04; the manual list is awaiting a human run.
+**Verification** — automated half reproduced 2026-10-04 (checks 1–18 and 19–20, the drag driven by synthetic
+events). **The manual list was annotated 2026-10-06:** one item is reproduced (item 4, which ran as Phase 5's
+manual check 13), one was seen but never measured (item 2), and three are still open (items 1, 3 and 5 — each
+says so inline, so a reader does not have to reconstruct it from the log).
 
 *Channels.* `bun test` drives the pure layer (80 tests / 9 files: the notes layer + `src/mainview/utils/*`,
 each test co-located). The dev probe `src/bun/phase4Probe.ts` is the only Phase 4 channel that reads the
@@ -363,18 +381,38 @@ below names the check that reproduces it.
     and a value written there is the live theme at the next boot *(20 — run the probe twice; the second
     run writes the first run's value back)*.
 
-*Manual — nothing can drive these from a script.*
-1. The real OS drag gesture (mouse down → move → release) on the running window.
+*Manual — nothing can drive these from a script.* **Annotated 2026-10-06 with what actually happened; read
+each item's tag before assuming it is outstanding.**
+1. The real OS drag gesture (mouse down → move → release) on the running window. **Still open** — the
+   synthetic drag covers the handlers, the on-disk move and the re-key, but nothing has watched a real
+   system-supplied drag source (`lessons.md`'s "still unverified" list records the same).
 2. The visual layout at the default window size: sidebar width, the editor pane's max width, status bar.
-3. The inline name input's edges: Escape cancels, blur commits, an empty name is refused.
+   **Seen, never measured:** the Phase 5 check-13 screenshots show the whole window (sidebar, editor paper,
+   status bar, no half-dark seam), but nobody measured the sidebar's ~280 px or the pane's max width against
+   §10.2/§10.3. Open as worded.
+3. The inline name input's edges: Escape cancels, blur commits, an empty name is refused. **Blur/empty
+   covered, Escape open:** blur-commits and the empty-name refusal ride on Phase 5's checks 7–9 (they drive
+   Tab/Enter/blur and assert no file appears for an empty title); **Escape** has never been exercised — not
+   by a probe, not by a human run.
 4. Theme end to end: click the status-bar toggle, quit, relaunch — the choice is still in effect. (The
-   probe covers the storage half out of band; this covers the click.)
-5. `#edit-probe` in the editor pane: ⌘C / ⌘V / ⌘Z (the ApplicationMenu roles, SPEC §5).
+   probe covers the storage half out of band; this covers the click.) **Reproduced 2026-10-06** — run as
+   Phase 5's manual check 13: toggle to light → ⌘Q → relaunch → still light on a dark-mode machine, both
+   directions, including the persistence discriminator a dark host needs.
+5. ⌘C / ⌘V / ⌘Z in the editor pane (the ApplicationMenu roles, SPEC §5). **Mechanism reproduced, this target
+   still open.** ⌘C and repeated ⌘V were reproduced by hand in Phase 2 — against the `#edit-probe` textarea
+   that **Phase 5 deleted**, which is why this item was re-pointed at the editor body on 2026-10-06. No hand
+   run has been done against the body, and ⌘Z was never individually exercised (Phase 2's note: same
+   submenu, same mechanism).
 
 ## Phase 5 — Editor: mount, hybrid render, open/save persistence
 
 *Deps: 4, plus the editor package pinned (below). Deliberate split from Phase 6 — this half is "it
 renders and it persists".*
+
+*Status: **done — 10/10 tasks, 14/14 verification lines** (2026-10-05/06, two macOS machines: four probe
+suites in this checkout, one from a fresh clone on the second machine, plus the manual pair by hand). Line
+12's fenced-code clause moved to Phase 6, which already asserted it; line 14 was added this session by the
+empty-state decision. See *Outcome* under Verification.*
 
 ```bash
 bun add codemirror-markdown-hybrid@1.2.2 @codemirror/state@^6 @codemirror/view@^6 \
@@ -388,36 +426,79 @@ formats), §9.1 (save points, `noteChanged`), §10.5 (`+`, drafts, theme), §15.
 `src/mainview/components/EditorPane/{EditorPane.tsx,EditorPane.controller.ts}`,
 `src/mainview/components/TitleInput/{TitleInput.tsx,TitleInput.controller.ts}`, and the dev-only
 `src/bun/phase5Probe.ts`. *Retires:* the `EditorPane` placeholder with its `#edit-probe` textarea (Phase
-2's channel, deliberately kept through Phase 4) and the `data-draft-folder`-only draft surface — replaced
-by `#editor-pane[data-note-id][data-dirty]` + `window.__notesEditor` (§10.1). Grep SPEC §3 for anything
+2's channel, deliberately kept through Phase 4). **Corrected 2026-10-06:** the task also said it retires
+the `data-draft-folder`-only draft surface — it does not, and must not: `phase4Probe.ts` still reads that
+attribute (`#sidebar` carries it), so it stays as Phase 4's channel while `#editor-pane` gains
+`[data-note-id]`/`[data-dirty]` and `window.__notesEditor` alongside it (§10.1). Grep SPEC §3 for anything
 this phase removes (R9).
 
-- [ ] `editor/extensions.ts`: **one** composition — `hybridMarkdown({ theme, enablePreview: true,
-      enableKeymap: false, enableCollapse: true })` plus `@codemirror/lang-markdown`. `enableKeymap: false`
+- [x] `editor/extensions.ts`: **one** composition — `hybridMarkdown({ theme, enablePreview: true,
+      enableKeymap: false, enableCollapse: true })`. **Corrected 2026-10-06:** this line originally said
+      "plus `@codemirror/lang-markdown`". The code deliberately adds no second copy, because
+      `hybridMarkdown()` already bundles `markdown()`, `history()`, the default keymap and line wrapping
+      (measured against the package; see `src/mainview/editor/extensions.ts`). `enableKeymap: false`
       is load-bearing: the package's formatting keybindings are **on by default** and §10.1 is
       toolbar-only (Phase 7's ⌘B check depends on this line).
-- [ ] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
-      config. In `dev` the factory also assigns the view to `window.__notesEditor` — the only way any
-      check can read or drive this editor, since its document is not in the DOM (§10.1).
-- [ ] Title input above the body (§10.1, §10.5): focused when a draft opens, `Untitled` placeholder, input
+- [x] `createEditor()` factory + a single `<HybridEditor />` wrapper; components never touch extension
+      config. The view goes to `window.__notesEditor` in `dev` — the only way any check can read or
+      drive this editor, since its document is not in the DOM (§10.1). **Corrected 2026-10-06:** this
+      line said the *factory* assigns the handle; it is `EditorPane.controller.ts` that does, gated on
+      bun's `viewContext` push — same guarantee, different owner.
+- [x] Title input above the body (§10.1, §10.5): focused when a draft opens, `Untitled` placeholder, input
       constrained to the slug charset and lowercased, Enter/Tab/blur committing **identically**, Tab
       continuing into the body, `readOnly` (not `disabled`) once the note exists.
-- [ ] Committing a draft's title calls `createNote` **once**, clears `draftNote`, and selects the returned
+- [x] Committing a draft's title calls `createNote` **once**, clears `draftNote`, and selects the returned
       `note.id`; typing into the body instead creates the note on the first save (500 ms debounce or blur,
       whichever comes first) with `title: ""`. The editor binds to the returned id, never to the typed
       name — a collision returns `plan1` (§10.5).
-- [ ] Opening a note focuses the body at line 1 and loads its content. The body is loaded **only** on
+- [x] Opening a note focuses the body at line 1 and loads its content. The body is loaded **only** on
       selection change: a `noteChanged` refresh never reloads it, or a save would move the cursor (§9.1).
-- [ ] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the RPC
+- [x] Save on blur + 500 ms debounce while typing, through `services/notes.service.ts` (never the RPC
       client directly); flush a pending save before switching notes.
-- [ ] Guard the async/ids: capture the note id at save time and drop the result if the selection moved, so
+- [x] Guard the async/ids: capture the note id at save time and drop the result if the selection moved, so
       a switch mid-save cannot write A's text into B.
-- [ ] Status bar: word count, line count and `filename · folder` from the **live document** (§10.3),
+- [x] Status bar: word count, line count and `filename · folder` from the **live document** (§10.3),
       returning to `—` when no note is open.
-- [ ] `noteChanged` is pushed by the **bun handlers** after a successful `createNote`/`saveNote` (§9.1);
+- [x] `noteChanged` is pushed by the **bun handlers** after a successful `createNote`/`saveNote` (§9.1);
       the renderer only refreshes the tree and the list.
+- [x] **The empty state has no body to type into** (§10.1, added 2026-10-06 after the author hit it):
+      with no note and no draft open, `#editor-placeholder` shows and the editor host is hidden by
+      `.editor__host_hidden` — mounted, never unmounted, so the CodeMirror view survives, and
+      re-measured on reveal. Before this, keystrokes there were accepted by the DOM and dropped by the
+      controller, which saves only when a note is bound or a draft is active.
 
 **Verification** — automated unless marked *(manual)*.
+
+**Outcome — 2026-10-05/06. All 14 lines reproduced** (13 original + line 14, added this session).
+`src/bun/phase5Probe.ts` passed in four runs on two macOS machines — three in this checkout (the fourth
+wedged at check 8 and is recorded in `debug.md` E16), one from a fresh clone on the second machine —
+48 ok lines each when the notebook was clean (17 smoke + 20 Phase 4 + 11 Phase 5, **0 FAIL**), alongside
+`bun run test` **95 pass / 0 fail / 200 expect() calls** and `bun run type-check` **0 project errors**
+(6 electrobun-internal quarantined). Note the false-green to watch: in the last run the Phase 3 smoke
+**skipped** because the notebook held two hand-made notes, so the total read 31 rather than 48 — the
+smoke announces the skip, and it is not a failure, but a clean notebook is what makes the suite's
+counts mean anything.
+
+- **12 (hybrid render)** — the focused line shows its source verbatim (`**Bold**`, asterisks visible,
+  active line highlighted) while the neighbouring `# Hybrid check` renders as a heading with no `#`;
+  moving the caret off the bold line renders it as **Bold** with the asterisks gone. Both directions,
+  screenshots, second machine. The probe's boot diagnostic agrees (`cmContent: "›Alphaalpha-unique-body"`
+  for `# Alpha…`). The fenced-code clause moved to Phase 6 (below).
+- **13 (theme)** — toggled to light → ⌘Q → relaunch → **light on a dark-mode Mac**, so the stored value
+  beat the `prefers-color-scheme` fallback; toggled to dark → relaunch → dark. The visual half is in the
+  same screenshots: the editor's paper dark with the sidebar and status bar, no half-dark seam.
+- **Line 10 gained a branch.** The probe's check 10 types a body with **no** H1, so it only ever
+  exercised the `untitled` title branch; by hand, a title-less note took its list title from the body's
+  first ATX H1 (§9.1's `deriveTitle`), and the sidebar also showed an H1 *below* line 1 winning
+  (`hello # Why ?` → `Why?`), which is the "anywhere in the body" clause.
+- **14 (empty state)** — added 2026-10-06 after the author hit it: see the task line above and §10.1.
+  Manual, and five seconds: a fresh `PROBE_SKIP=1` launch shows the message and no body.
+
+**Why the fenced-code clause moved to Phase 6.** Phase 6's fourth line asserts the identical thing ("A
+fenced JS block is syntax-highlighted"), so the clause was duplicated; and a verdict needs a *valid*
+block, which the MVP cannot yet produce without fighting the editor's auto-close — typing three backticks
+inserts a matching run, so text typed "inside" lands on the same line and the fence never closes (measured
+2026-10-06; filed as a Phase 7 item, since the package's `codeBlock` action is the intended route).
 
 *Channels.* `bun test` for anything pure; `src/bun/phase5Probe.ts` for the live window, chained after the
 Phase 4 probe in `bun start`. It drives the editor through `window.__notesEditor` (the document is not in
@@ -449,78 +530,636 @@ must be empty afterwards.
     line, and the list shows the body's first H1 if there is one, else `untitled` (§9.1).
 11. Opening the `.md` file directly shows only body text — the title is not written into it.
 12. *(manual)* The body renders hybrid as specified: the focused line raw, every other line rendered
-    (bold/headings visible), fenced code highlighted by the package's own languages. Task-list write-back,
-    collapse and math/mermaid are Phase 6's checks — §2 pins their versions.
+    (bold/headings visible). **Reproduced 2026-10-06** (screenshots, both directions). The fenced-code
+    clause **moved to Phase 6** on 2026-10-06 — Phase 6's fourth line already asserts the same thing, and
+    a verdict needs a code block the app cannot yet create without fighting the editor's auto-close (see
+    Phase 7). Task-list write-back, collapse and math/mermaid are Phase 6's checks — §2 pins their
+    versions.
 13. *(manual)* The editor opens in the stored theme and follows a status-bar toggle without a stale
     half-dark surface. Phase 5 owns the initial value, Phase 6 the live sync (§10.1).
+    **Reproduced 2026-10-06** on the second (dark-mode) machine, both directions, including the
+    persistence discriminator a dark host needs: toggle to light → relaunch → still light.
+14. *(manual, added 2026-10-06)* With nothing open — a fresh `PROBE_SKIP=1` launch — the pane shows the
+    empty-state message and **no body**: `#editor-pane[data-body-visible="false"]`, and there is nothing
+    to click or type into. Opening a note or pressing `+` flips it to `"true"` and the body appears.
+    *Failure:* the field is visible and typeable with nothing open — the state that silently discarded
+    keystrokes. See §10.1 and §10.6 for the rule and the hook.
 
 ## Phase 6 — Interactive markdown: task write-back, collapse, math, mermaid, theme sync
 
 *Deps: 5. The interactive half of the editor.*
 
-- [ ] Task-list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` **in the
-      source**.
-- [ ] Collapsible headings (H1–H3).
-- [ ] `$$…$$` → KaTeX; ```mermaid fences → diagrams; code fences get the hybrid package's own
-      CodeMirror/Lezer highlighting (the package has no Prism, so nothing is added for that — §2). Math
-      and mermaid are always-on features with no options to pass.
-- [ ] Theme drives **both** the hybrid plugin and `<html data-theme>` — one source (Zustand selector), the
-      live switch being `setTheme(view, theme)` off the store (§10.1). Phase 5 owned the initial value.
+*Status: **done — 4/4 tasks, 7/7 verification lines** (2026-10-06, macOS arm64: a `PROBE6_ONLY=1` run and
+a full-suite run, 55 ok lines and 0 FAIL together). Nothing needed implementing to close it: the deliverable
+is `src/bun/phase6Probe.ts` and its seven checks — the four features were already in the pinned package, and
+Phase 5 had wired the live theme switch. See **Outcome** under Verification: it carries the reproduced lines
+and the two readings a later reader must not re-derive.*
 
-**Verification**
-- Clicking a checkbox in the rendering changes the underlying `.md` on disk (and survives reload).
-- Collapsing an H2 hides its body and expanding restores it, without editing the file.
-- A note containing `$$e^{i\pi}+1=0$$` renders the formula; a ```mermaid fence renders a diagram.
-- A fenced JS block is syntax-highlighted.
-- Theme toggle re-renders the editor preview and the shell together — no stale half-dark surface.
+*Pre-flight record (2026-10-06; this is why the phase needed no implementation). Deps were green — nothing
+to install, since all four features are already in the build (`codemirror-markdown-hybrid@1.2.2` and
+`katex ^0.16.47` declared; 81 katex/mermaid/diagram chunks already emitted into `dist/assets`). The two
+things that were missing — the rendered-content hooks and the four semantics — are pinned (SPEC §10.6,
+and the decisions below).*
+
+*Measured 2026-10-06: **this phase is almost entirely verification, not implementation.*** The pinned
+package already provides the write-back (`lib/extensions/hybrid-preview.js:183` finds the clicked checkbox
+and rewrites the source), the collapse control, KaTeX and Mermaid rendering, and the fence highlighting;
+Phase 5 wired the live theme switch (`setTheme` off the store). The write-back therefore flows through the
+**existing** save path — the package's document change fires the app's `updateListener`, which schedules
+the same debounced save a keystroke would, which pushes `noteChanged`. So the tasks below read as *make
+these true and prove them*, not *write these*: the real deliverable is `phase6Probe.ts` and its seven
+checks.
+
+*Files:* `src/bun/phase6Probe.ts` — dev-only, chained after `phase5Probe` in `bun start`, seeding its own
+`Probe6` fixture and removing it in `finally` like its predecessors. **No new handler or RPC method:** a
+checkbox write-back is an ordinary body save.
+
+*Decisions — pinned 2026-10-06:*
+1. **A checkbox click saves through the normal path.** 500 ms debounce, blur flush, `data-dirty` true
+   meanwhile — the same mechanism as typing. *Reason:* one write path means one set of failure modes, and
+   §9.1's accepted quit-inside-the-window loss then applies uniformly. *Beat:* an immediate save on toggle
+   (a second write path to build and test for one discrete action) and a view-only toggle (which would
+   leave the list's preview and mtime stale).
+2. **A write-back pushes `noteChanged`.** It is a successful write to a note, which is exactly what §9.1's
+   push rule covers, so there is no exception to record. *Reason:* the sidebar's mtime and preview must
+   move when a task is ticked, precisely as they do after typing. *Beat:* treating it as a view-only
+   action.
+3. **Collapse state is ephemeral.** Never written to the file, and not preserved across a note switch or a
+   reload — coming back shows everything expanded. *Reason:* it is view state for the open document, held
+   per view by the package. *Beat:* persisting collapse per note, which is new state and a new storage
+   decision for a convenience nobody asked to keep.
+4. **"The preview followed the theme" is one computed style.** The check compares a rendered element's
+   computed `color` (a rendered heading is the natural subject) before and after the toggle. This is the
+   **one deliberate exception** to §10.6's presence-only rule, and it is recorded there too. *Reason:*
+   presence cannot fail — a stale half-dark preview has every element present, so a presence-only check
+   would report a pass on the exact defect the line exists to catch. *Beat:* presence-only, i.e. a check
+   that cannot fail.
+
+- [x] Task-list items render as clickable checkboxes; toggling rewrites `- [ ]` / `- [x]` **in the
+      source**. *(checks 1–2. **Measured:** the package toggles on **`mousedown`**, not `click`
+      (`hybrid-preview.js:184`) — a probe that dispatches a `click` reports a silent no-op; and the
+      rewrite carries the whole line the widget was built for, so the probe asserts the file's bytes,
+      which is what fails if the tick lands on the neighbouring task.)*
+- [x] Collapsible headings (H1–H3). *(check 3 — collapsing the H2 hides exactly its three body lines
+      (`.cm-collapsed-line`), expanding restores them, and the `.md` is byte-identical either way.)*
+- [x] `$$…$$` → KaTeX; ```mermaid fences → diagrams; code fences get the hybrid package's own
+      CodeMirror/Lezer highlighting (the package has no Prism, so nothing is added for that — §2). Math
+      and mermaid are always-on features with no options to pass. *(checks 4–6. **Measured:** a math
+      block is a line whose trimmed text is exactly `$$` (`hybrid-preview.js:447`), so `$$e^{i\pi}+1=0$$`
+      on **one line is not a block** and renders as literal text — the block form is the only one that
+      yields `.cm-math-preview`. Check 4 uses the block form and measures the one-line form as its
+      control; see Outcome for the reading and the Phase 7 carry-over.)*
+- [x] Theme drives **both** the hybrid plugin and `<html data-theme>` — one source (Zustand selector), the
+      live switch being `setTheme(view, theme)` off the store (§10.1). Phase 5 owned the initial value.
+      **Observable (pinned 2026-10-06):** a rendered element's computed colour changes with the toggle —
+      §10.1 and §10.6 name this as the one exception to the presence-only rule, because presence alone
+      cannot fail here. *(check 7 — the rendered H1 goes `rgb(224, 224, 224)` → `rgb(26, 26, 26)` while
+      `data-theme` flips `dark` → `light`, and both return on the way back.)*
+
+**Verification** — automated through `phase6Probe.ts` unless marked *(manual)*. Each line names the
+observation it prints; the rendered subtree is `#editor-pane .cm-content` and the classes are the ones
+pinned in SPEC §10.6. **Shape rewritten 2026-10-06** (prose → numbered checks naming their observation);
+the content is unchanged except where noted.
+
+1. Clicking a rendered task checkbox rewrites that line's `- [ ]` ↔ `- [x]` in the **source**, and the
+   `.md` on disk matches once the save settles (decision 1/2 fixes what "settles" means). *Failure:* the
+   file still holds the old marker, or the change lands on another line.
+2. The same toggle survives a reload: reopen the note and the checkbox is in the new state.
+3. Collapsing an H2 hides its body (`.cm-collapsed-line` present below it) and expanding restores it,
+   with the `.md` **byte-identical** before and after. *Failure:* the file changed — collapse is a view
+   state, not an edit.
+4. A note whose body holds a `$$` block (`$$` / `e^{i\pi}+1=0` / `$$`) renders the formula: `.cm-math-preview`
+   present with the KaTeX DOM inside it. The one-line `$$e^{i\pi}+1=0$$` form is the **control** — inline
+   `$…$` renders KaTeX inside `.cm-markdown-preview`, with no `.cm-math-preview`. *(Reworded 2026-10-06,
+   author-approved: the literal one-line form cannot satisfy this line — in the pinned package a math block
+   is a line whose trimmed text is exactly `$$`, so the one-line form renders as text. Both readings print
+   side by side in the run; see Outcome.)*
+5. A ```mermaid fence renders a diagram: `.cm-mermaid-preview` present, **polled to a deadline** because
+   the diagram chunk loads asynchronously. *Failure:* asserted from a single read.
+6. A fenced JS block is syntax-highlighted: the fence's rendered lines carry token spans, not one uniform
+   class. **Moved here from Phase 5 on 2026-10-06** — it was duplicated, and a verdict needs a valid block,
+   which only Phase 7's toolbar action can create without fighting the editor's auto-close.
+7. The theme toggle re-renders the editor preview **and** the shell together — decision 4's observation
+   holds for the rendered surface while `<html data-theme>` flips. *Failure:* a stale half-dark preview.
+
+**Outcome — 2026-10-06. All 7 lines reproduced, in two runs** (macOS arm64, `electrobun@1.18.1`): a
+`PROBE6_ONLY=1` run (a switch added to `src/bun/index.ts` for this phase — Phase 4 and Phase 5 hold the
+window for minutes each, so iterating on this probe through the full suite is unaffordable; the boot smoke
+still runs first, since it asserts *exact* note-id sets and would otherwise see this probe's fixture appear
+underneath it) and a full-suite run whose four channels read **55 ok lines, 0 FAIL** together (17 smoke +
+20 Phase 4 + 11 Phase 5 + 7 Phase 6). Alongside them: `bun run test` **95 pass / 0 fail / 200 expect()
+calls** and `bun run type-check` **0 project errors** (6 electrobun-internal quarantined). Verbatim from the
+full-suite run:
+
+```
+[probe6] 1 ok — checkboxes-before=[false,true] after=[true,true] dirty=true doc-has-marker=true file="# Tasks\n\n- [x] first task\n- [x] second task\n"
+[probe6] 2 ok — doc-reopened="# Tasks\n\n- [x] first task\n- [x] second task\n" checkboxes=[true,true]
+[probe6] 3 ok — toggles=3 collapsed-lines=3 after-expand=0 file-identical=true
+[probe6] 4 ok — block(note="Probe6/math.md") math-preview=1 katex-inside=1 | one-line(note="Probe6/math-inline.md") math-preview=0 inline-katex=1
+[probe6] 5 ok — preview=1 svg=1 error=null
+[probe6] 6 ok — blocks=1 token-classes=["tok-keyword","tok-number","tok-operator","tok-punctuation","tok-variableName tok-definition"] text="const answer = 42;"
+[probe6] 7 ok — theme=light->dark->light heading-colour=rgb(26, 26, 26)->rgb(224, 224, 224) storage-restored="{\"state\":{\"theme\":\"dark\"},\"version\":0}" (was "{\"state\":{\"theme\":\"dark\"},\"version\":0}")
+[probe6] done — 0 failure(s); fixture removed
+```
+
+The run leaves the notebook empty (`Probe6/` is removed in `finally`) and check 7 toggles twice and writes
+the `localStorage` value it found back afterwards, so Phase 4's check 20 — which arms the *next* boot from
+storage — is still armed when this probe is done.
+
+**Two readings the numbered lines above do not state** (both measured in the package, both changing how a
+check had to be written):
+
+- **Line 4's literal form is not the form that renders.** `$$e^{i\pi}+1=0$$` on one line is **not** a math
+  block: a block is recognised only when a line's trimmed text is exactly `$$` (`hybrid-preview.js:447`), so
+  the one-line form renders as literal text and no `.cm-math-preview` can appear. Check 4 seeds the block
+  form (`$$` / `e^{i\pi}+1=0` / `$$`), asserts `.cm-math-preview` with KaTeX inside it, and then measures the
+  one-line form as its **control**: inline `$…$` does render KaTeX, but inside that line's
+  `.cm-markdown-preview`, with no `.cm-math-preview` wrapper. Both readings print side by side, so the
+  difference is evidence rather than opinion. **Carry-over for Phase 7:** the toolbar's Math action has no
+  package action and inserts by hand — inserting the one-line form renders the formula as text, so it has to
+  insert the block form.
+- **The task toggle is a `mousedown`, not a `click`.** The handler sits on the line wrapper and bails on any
+  other event type (`hybrid-preview.js:184`), so a check that dispatches `click` reports a silent no-op; the
+  same handler rewrites the whole line its widget was built for, which is why check 1 asserts the file's
+  bytes *and* the untouched neighbouring task rather than the checkbox's `checked` property alone.
+
+**Found while running this phase — a Phase 5 harness fix, not a phase 6 change.** Phase 5's check 4 read the
+file after a fixed `sleep(700)` against §9.1's 500 ms debounce — 200 ms of slack — and failed a correct app
+in the first full-suite run of this phase by reading the *previous* content. It now polls to a deadline like
+its neighbours and prints the elapsed time plus whether the pane's document held the target: the next run
+landed the save at **777 ms**, past the old window. The assertion is unchanged; only the timing assumption is
+gone.
 
 ## Phase 7 — Toolbar (all actions) + preview mode
 
 *Deps: 5 (actions need a mounted view). Mechanical but broad — its own phase so each action is
 verified, not assumed.*
 
-- [ ] `EditorToolbar.controller.ts`: one function per action, each dispatching against the live view
-      through the package's `actions` map (`hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code).
-- [ ] Actions: Bold, Italic, Strikethrough, H1/H2/H3, Bullet list, Numbered list, Task list, Quote,
-      Code, Code block, Link, Image, Table, Divider, Math, Mermaid (SPEC §10.1). Math has **no** package
-      action — it inserts `$$…$$` by hand (§2).
-- [ ] Preview-mode toggle (hybrid / raw, via `toggleHybridMode` / `setMode`); the package has no split
-      mode, so the earlier "hybrid / split / raw" wording is withdrawn (§2).
-- [ ] Confirm **no** markdown keybinds were added: the composition already sets `enableKeymap: false`
-      (Phase 5's line, and the reason it exists) — this item is the behavioural proof, not new work.
+*Status: **done — 6/6 tasks, 20/20 readings** (2026-10-06, macOS arm64, `electrobun@1.18.1`): a
+`PROBE7_ONLY=1` run read all 20 ok with 0 FAIL — that is where line 13 is measured, on a fresh window — and
+a full-suite run read **74 ok, 0 FAIL** (17 smoke + 20 Phase 4 + 11 Phase 5 + 7 Phase 6 + 19 Phase 7), with
+line 13's precondition line standing in for a pass it did not measure. One measured correction to decision 4
+(an inserted math block's middle line holds a space, not nothing) and one run precondition for line 13; both
+are recorded below and in `lessons.md`. The pre-flight's three gaps — the view plumbing, the probe contract
+and a prose verification — were closed as stated; the decisions below were implemented as written except
+where the run proved a correction. See **Outcome** under Verification for the reproduced lines.*
 
-**Verification**
-- Every action in the list is exercised once and produces the expected markdown in the source.
-- Actions work with a selection, a collapsed caret, and an empty line (insert path, not only wrap).
-- The preview-mode toggle switches the surface and preserves unsaved text.
-- Typing ⌘B does **not** insert bold (no keybinds; the Edit menu roles still work).
+*Files:* `src/mainview/components/Toolbar/{Toolbar.tsx, Toolbar.controller.ts, Toolbar.types.ts,
+Toolbar.constants.ts}` — the controller is new (today the component is a static list with no logic);
+`Toolbar.types.ts` carries `ToolbarActionId` (the union of the ids) and `ToolbarControllerOptions`
+(`{ getView, isEnabled }`), which the controller and the component share rather than redeclaring; and the
+constants gain the package-key ids, a Code block button and the preview-mode button. `src/bun/phase7Probe.ts`
+is the dev-only check module, chained after `phase6Probe` in `src/bun/index.ts` behind `PROBE7_ONLY=1` (the
+switch pattern Phase 6 established), seeding `Probe7/` and removing it in `finally`.
+*Retires:* `PLACEHOLDER_TOOLTIP` and the always-disabled placeholder state of SPEC §10.5's Phase 4 line. The
+component keeps `role="toolbar"` and gains `#toolbar` (§10.6).
 
-## Phase 8 — Polish, guardrails, and packaging
+*Decisions — pinned 2026-10-06 (each is rule + reason + the alternative it beat).*
+1. **A button's `id` is the package's action key.** Measured by importing the installed package
+   (`Object.keys(actions)`), the map's **18** keys are: `bold italic strikethrough h1 h2 h3 link image
+   bulletList numberedList taskList inlineCode codeBlock hr quote table diagram emoji`. The buttons are the
+   17 the spec lists — using those keys, so `hr` = Divider, `diagram` = Mermaid, `inlineCode` = Code — plus
+   `math`, which has **no** package key. Labels keep the spec's words. *Reason:* one vocabulary —
+   `Object.keys(actions)` *is* the list, by name, so no id→action table can drift. *Beat:* kebab ids
+   (`bullet-list`) plus a mapping table: a second name for every action, the drift class that already
+   produced `NoteList`/`NotesPanel` and "hybrid/split/raw". **Correction to an earlier line in this file:**
+   it claimed the map had 19 entries including `alert`; that was a grep artifact — `alert` appears only
+   inside `codeBlock`'s sample string. The map has 18, and `emoji` is deliberately unused (no button, and
+   the spec's toolbar list has never had one).
+2. **The toolbar gets the view from the pane, by accessor.** `EditorPane` passes
+   `getView: () => EditorView | null` and `isEnabled = hasDocument`; each handler reads the view at click
+   time. *Reason:* the view is created in a mount effect **after** the toolbar's first render, so a value
+   prop is `null` at that point and only an unrelated re-render would fix it. *Beat:* a Zustand store
+   holding the view (a non-serializable object in global state — `store/theme.ts` is deliberately DOM-free
+   so `bun test` can load it) and reaching for `window.__notesEditor` (§10.1's dev-only read-back), which
+   would make shipped code depend on a probe handle.
+3. **A handler dispatches, then focuses the editor.** `actions[key](view)` then `view.focus()`. *Reason:*
+   the button took the focus and the user's next act is typing. *Beat:* leaving focus on the button, where
+   the next keystroke is lost. Order matters and is fine: the click's blur flushes the pending save (§9.1),
+   then the dispatch starts a fresh 500 ms debounce for the new text.
+4. **`math` inserts the block form by hand:** `$$`, a line holding one space, `$$`, with the caret at the
+   start of that middle line. *Reason:* a math block is a line whose trimmed text is exactly `$$`; a
+   one-line `$$…$$` renders as literal text (§10.6, Phase 6 Outcome). *Beat:* inserting `$$…$$` — what
+   §10.1 said before this pre-flight, and it cannot render.
+   **Corrected while running this phase (2026-10-06, measured) — the middle line holds one space, not
+   nothing.** As first pinned (`$$`, a *blank* line, `$$`), the inserted block made the package's math
+   plugin throw `Invalid range for replacement decoration` (`Decoration.replace({}).range(from, from)` on
+   the empty line) from inside the insertion transaction, because no line of the block holds the focus when
+   a toolbar button is clicked — and the throw left math rendering dead for the rest of the view: the same
+   bytes opened from disk read `math-preview=1` before that insertion and `0` after it. One space keeps the
+   replacement range legal, is invisible in the file, and the caret still lands where the formula goes. See
+   SPEC §10.1 and `lessons.md`.
+5. **The preview-mode button's source of truth is the view** (`getMode(view)`, read at click time), not a
+   store, with `data-mode` on the button. *Reason:* per-view state the package owns — the same ruling
+   §10.1 makes for collapse. *Beat:* a Zustand mirror that can disagree with the view, and persisting a
+   mode nothing asked to keep.
+6. **Buttons are `disabled` exactly while no note and no draft is open.** *Reason:* with nothing bound
+   there is nothing to format (§10.1's empty state). *Beat:* leaving them enabled to no-op silently — an
+   affordance that looks live and does nothing, the state §10.1 already closed for the body.
+7. **The toolbar does not reimplement markdown.** Every action with a package key dispatches the package's
+   map. *Reason:* those are the bodies the app's own rendering and round-trip checks are calibrated
+   against. *Beat:* hand-rolled dispatch — and note `CODE_STYLE.md` §8.4's sample shows exactly that
+   (`wrapSelection`, `setHeading`); it is illustrative, not the rule (SPEC wins the precedence chain; the
+   sample was corrected 2026-10-06).
 
-*Deps: 1–7. Last-mile; the v1 roadmap never reached here.*
+- [x] `Toolbar.constants.ts`: the package-key ids, the Code block button, the preview-mode button, labels per
+      §10.1, and no `PLACEHOLDER_TOOLTIP`. *(19 buttons: the 17 package keys + `math` + `preview-mode`.)*
+- [x] `Toolbar.controller.ts` (`useToolbarController`): one handler per action — `actions[key](getView())`
+      followed by `view.focus()` (decision 3) — with `math` inserted by hand in the block form (decision 4)
+      and the preview-mode handler reading `getMode(view)` and calling `setMode(view, …)` (decision 5).
+      *(checks 1a–9. The mode is *read back from the view* after the dispatch that changes it, so the
+      button's `data-mode` is a rendering of the view's own answer — check 11 reads it flipping both ways.)*
+- [x] `Toolbar.tsx`: `#toolbar`, `disabled={!isEnabled}`, `data-action="<id>"` on every button, `data-mode`
+      and `aria-pressed` on the preview-mode button. No store imports and no `window.__notesEditor`.
+- [x] `EditorPane.controller.ts` exposes `getView` over the handle it already owns, and `EditorPane.tsx`
+      passes `getView` + `isEnabled={hasDocument}` into `<Toolbar />` (decision 2).
+- [x] Confirm **no markdown *formatting* keybinds** are live — a behavioural proof, not new work (Phase 5's
+      `enableKeymap: false` line, and the reason it exists). Note what is *not* gated and cannot be:
+      `@codemirror/lang-markdown`'s `markdownKeymap` keeps `Enter` (continues a list/fence) and `Backspace`
+      (deletes markup) live even with the flag off (measured 2026-10-06, SPEC §10.1), so **⌘B still not
+      inserting bold** is the thing to prove, and structural continuation is not a failure.
+      *(check 14, as a pair: a bare `Enter` **grows** the document — so the harness is proven to deliver
+      keydowns to CodeMirror's keymap — while both the ⌘B and ⌃B variants leave it byte-identical and add no
+      `**`. The ApplicationMenu half of the line stays manual, as its parenthetical says.)*
+- [x] **Prove a code block can be created from the toolbar.** `actions.codeBlock` is the frictionless route
+      (measured 2026-10-06: hand-typing a fence fights the editor's auto-close — three backticks insert a
+      matching run, so text typed "inside" lands on the same line and the fence never closes, swallowing the
+      rest of the document). This is why Phase 5's fenced-code clause moved into this phase.
+      *(checks 7a/7b: the button's own payload is asserted byte for byte — a closed ```javascript fence with
+      the caret at `from + 4` — and with a selection the selection is fenced instead. Phase 6's check 6 owns
+      the claim that such a block then highlights.)*
 
-- [ ] Empty states (no notes, no folder selected, empty folder) and a shared load-or-render primitive.
-- [ ] A failed mutation (`{ ok: false, error }`, SPEC §9.1) and every RPC rejection surface as a
-      visible toast — nothing swallowed silently.
-- [ ] Keyboard/UX pass: tab order, focus rings, accessible controls (real `<button>`/`<a>`, `alt` text).
-- [ ] First paint: `index.html` hardcodes `data-theme="light"`, so a dark-theme user sees one light frame
-      before the shell applies the stored value (SPEC §10.5, §10.6). Set `color-scheme` on `:root` and read
-      the stored theme before first paint.
-- [ ] Remove the unread `data-theme-value` attribute on `#status-bar` (SPEC §10.6).
-- [ ] Audit against the SPEC §15 gotcha list, item by item (async handlers, no `views/` writes, pinned
-      version, `Utils.paths.userData` for data, Edit accelerators present).
-- [ ] Grep guardrails: no `electrobun/bun` or `node:*` import under `src/mainview/`; no sync `fs` in
-      `src/bun/`; no RPC client reference outside `rpc.ts` + `services/`.
-- [ ] `bun run type-check` + `bun run test` clean (a bare `tsc --noEmit` cannot pass here — SPEC
-      §15.15); storybook only where CODE_STYLE §14 requires it.
-- [ ] `bun run build:canary` → `electrobun run` on the built app; decide `bundleCEF` per OS.
+**Verification** — automated through `phase7Probe.ts` unless marked *(manual)*. The probe opens a note first
+(buttons are `disabled` without one), drives each button by `#toolbar [data-action="…"]`, and reads the
+editor's **source** through `window.__notesEditor` — the document is not in the DOM (§10.1). Every line names
+the observation it prints. **The payloads are the package's own** — `codeBlock` inserts a JS sample, `table`
+a 3-column sample, `diagram` a `flowchart LR` sample, `link`/`image` example URLs — so the checks assert those
+strings, not a skeleton a later reader has to invent.
+**Pre-flight note (2026-10-06):** this replaced four prose bullets, whose "every action is exercised once and
+produces the expected markdown" named no observation — two agents could have built two different proofs and
+both reported success.
 
-**Verification**
-- Deleting a note, deleting a non-empty folder, and reading a note that vanished underneath the app
-  each produce a visible message instead of a silent no-op or a console-only error.
-- The grep guardrails return zero hits.
-- The built canary app launches from `build/`, opens the same notebook directory, and can create,
-  edit and save a note — i.e. it is not only the dev loop that works.
+1. `bold` with no selection inserts `****` at the caret with the caret between the two pairs; with a
+   selection it wraps the text and keeps it selected. *(Same shape for `italic`, `strikethrough`,
+   `inlineCode` — one line each.)*
+2. `h1`/`h2`/`h3` **toggle**: a plain line gains the prefix; a second click at the same level removes it; on
+   a line at another level it replaces it. *Failure:* a second click appends a second prefix.
+3. `bulletList`/`numberedList`/`taskList` **toggle and convert**: plain line → prefix; same type twice →
+   removed; bullet → task replaces `- ` with `- [ ] `. *Failure:* `- - [ ] `.
+4. `link` with no selection inserts `[link text](https://example.com)` and selects `link text`; with a
+   selection it inserts `[<selection>](https://example.com)` and selects the URL.
+5. `image` inserts `![alt text](https://placehold.co/400x200)` and selects `alt text`.
+6. `quote` prefixes `> ` to the caret's line — it is **not** a toggle (measured: the package always
+   prepends), so a second click yields `> > `. *This line asserts the package's behaviour, not a toggle
+   nobody specified.*
+7. `codeBlock` with no selection inserts a ```javascript fence around the package's JS sample and puts the
+   caret inside it; with a selection it fences the selection instead. This is the line that closes the
+   "a valid block must be creatable" gap.
+8. `hr` inserts `\n\n---\n` after the caret's line; `table` inserts the package's 3-column sample after it;
+   `diagram` inserts its `flowchart LR` mermaid sample. *(Each asserts the payload text, not just a prefix,
+   and Phase 6's check 5 owns proving the fence then renders.)*
+9. `math` inserts `$$` / **one space** / `$$` with the caret at the start of that middle line, and typing a
+   formula there renders `.cm-math-preview` (the rendering itself is Phase 6's check 4). *(Reworded
+   2026-10-06 while running the phase: the middle line holds a space, not nothing — a blank one makes the
+   package's math plugin throw and takes math rendering down with it. See decision 4 and SPEC §10.1. The
+   probe asserts the document byte for byte, space included.)*
+10. Every action also works from a **collapsed caret on an empty note** — the insert path, not only the wrap
+    path — and after the whole sweep the document holds exactly one of each construct, with no duplicated
+    prefixes. *(The sweep is what catches an action that shares state with another.)*
+11. The preview-mode button flips `data-mode` `hybrid` ↔ `raw`, the rendered subtree goes to zero in raw and
+    back in hybrid, and the **document is unchanged** by the switch.
+12. Text typed before the switch still reaches the `.md` afterwards (blur or the 500 ms debounce, §9.1): the
+    switch is neither a save point nor a way to lose text.
+13. With no note and no draft open every button is `disabled`, and clicking each one changes nothing — no
+    document, and the notebook gains no file.
+14. ⌘B in the body inserts **no** bold markup (no keybinds, §10.1). *(manual for the menu half: the
+    accelerators belong to the ApplicationMenu — Phase 2's check — so this line covers the editor's keymap.)*
+
+**Outcome — 2026-10-06. 20 readings, 0 failures.** Verbatim from the `PROBE7_ONLY=1` run
+(`HEARTBEAT=1 POKE=1 PROBE7_ONLY=1 bun start`, macOS arm64) — the run shape that also carries line 13, since
+it starts on a window with nothing open:
+
+```
+[probe7] 13 ok — buttons=19 all-disabled=true changed-by-click=[] doc="" notes=3 unchanged=true
+[probe7] 1a ok — no-selection="
+
+****alpha\n" caret=2 between-pair=true | with-selection="**alpha**\n" selected="alpha"
+[probe7] 1b ok — no-selection="__alpha\n" caret=1 between-pair=true | with-selection="_alpha_\n" selected="alpha"
+[probe7] 1c ok — no-selection="~~~~alpha\n" caret=2 between-pair=true | with-selection="~~alpha~~\n" selected="alpha"
+[probe7] 1d ok — no-selection="``alpha\n" caret=1 between-pair=true | with-selection="`alpha`\n" selected="alpha"
+[probe7] 2 ok — h1→"# plain line\n" h1→"plain line\n" h2→"## plain line\n" h1→"# plain line\n"
+[probe7] 3 ok — bulletList→"- item\n" bulletList→"item\n" numberedList→"1. item\n" bulletList→"- item\n" taskList→"- [ ] item\n" duplicated-prefix=false
+[probe7] 4 ok — no-selection="[link text](https://example.com)alpha\n" selected="link text" | with-selection="[alpha](https://example.com)\n" selected="https://example.com"
+[probe7] 5 ok — doc="![alt text](https://placehold.co/400x200)alpha\n" selected="alt text"
+[probe7] 6 ok — once="> quoted\n" twice="> > quoted\n"
+[probe7] 7a ok — doc="```javascript\nfunction hello() {\n  alert(\"hello world\");\n}\nhello();\n```alpha\n" caret=4
+[probe7] 7b ok — doc="```\nalpha\n```\n" caret=4
+[probe7] 8a ok — doc="alpha\n\n---\n\n"
+[probe7] 8b ok — doc="alpha\n\n| Column 1 | Column 2 | Column 3 |\n|----------|----------|----------|\n| Cell 1   | Cell 2   | Cell 3   |\n| Cell 4   | Cell 5   | Cell 6   |\n\n"
+[probe7] 8c ok — doc="alpha\n\n```mermaid\nflowchart LR\n    A[Start] --> B[Process]\n    B --> C{Decision}\n    C -->|Yes| D[Result 1]\n    C -->|No| E[Result 2]\n```\n\n"
+[probe7] 9 ok — placed="alpha\n\n$$\n \n$$\n\n" caret=10 middle-line=" " at-line-start=true typed="alpha\n\n$$\ne^{i\\pi}+1=0 \n$$\n\n" math-preview=1 katex=1 | control-opened=true control-math-preview=1
+[probe7] 10 ok — actions=18 no-growth=[] bad-markers=[] duplicated-prefixes=[] unexpected-lines=[] lines=43
+[probe7] 11 ok — mode=hybrid→raw→hybrid rendered=2→0→2 aria-pressed=false→true→false doc-unchanged=true
+[probe7] 12 ok — mode-during-save=raw dirty=true file="typed before the switch\n" doc-after-switch-back="typed before the switch\n"
+[probe7] 14 ok — enter-control="\nalpha\n" grew=true | mod-b="alpha\n" ctrl-b="alpha\n" unchanged=true no-bold-markup=true
+[probe7] done — 0 failure(s), 0 precondition(s); fixture removed
+```
+
+The full-suite run (`HEARTBEAT=1 POKE=1 bun start`) reads the same 19 lines, with line 13 replaced by its
+precondition, and every channel green:
+
+```
+[smoke] done — 0 failure(s); notebook cleared (checks 1–17 done, 18 is `bun run test`)
+[probe] done — 0 failure(s); fixture removed
+[probe5] done — 0 failure(s); fixture removed
+[probe6] done — 0 failure(s); fixture removed
+[probe7] done — 0 failure(s), 1 precondition(s); fixture removed
+```
+
+74 ok lines, 0 FAIL together (17 smoke + 20 Phase 4 + 11 Phase 5 + 7 Phase 6 + 19 Phase 7). Alongside:
+`bun run test` **95 pass / 0 fail / 200 expect() calls** and `bun run type-check` **0 project errors** (6
+electrobun-internal quarantined). The notebook is empty afterwards (`Probe7/` is removed in `finally`).
+
+**Three readings a later reader must not have to re-derive** (all measured while running this phase):
+
+- **Line 13 is a boot-state check, and the state is unreachable after boot.** `disabled` tracks
+  `hasDocument`, and nothing in the renderer returns the app to "no note and no draft": selecting a note is
+  one-way, `+` starts a draft (a draft *is* a document), and there is no delete-note affordance — the only
+  `selectNote(null)` is `handleStartDraft`. So the probe reads it **before** opening anything, and when a
+  document is already open (a full-suite run, where Phase 6 has left one) it prints
+  `[probe7] 13 precondition — NOT MEASURED: …` and names `PROBE7_ONLY=1` instead of reporting a pass. A
+  silent skip would have read as a pass; this line cannot be faked either way.
+- **The `math` action inserts a space as the middle line of its block** (decision 4's correction, measured;
+  `lessons.md` has the full entry). As first pinned, the *blank* middle line made the package's math plugin
+  throw `Invalid range for replacement decoration` from inside the insertion transaction — no line of the
+  block holds the focus when a toolbar button is clicked — and the throw left math rendering dead for the
+  rest of that view: check 9's control (the same bytes opened from disk) read `math-preview=1` before such
+  an insertion and `0` after it, in the same run. One space keeps the range legal and is invisible; check 9
+  now asserts the doc byte for byte, space included, and both the typed block and the control render.
+- **The four wrap actions' markers are the package's, not the app's**: `**`/`_`/`~~` /`` ` ``, each wrapping
+  with the caret between the pair when there is no selection (checked as `caret = marker.length`) and
+  keeping the selection selected when there is one. Line 6's `> > ` is the package always *prepending*, not
+  a toggle — the line asserts measured behaviour, not a specification.
+
+**Two probe fixes this phase's own runs forced**, both in `phase7Probe.ts`: a failed read now lands in a
+check's `observed` as "not observed" via `readObject` (check 10 first threw `undefined is not an object`
+instead), and every check is given a 200 ms beat — this probe fires reads far faster than the phases that
+drive the real UI, and the transport is measured to go quiet on long chatty runs (`lessons.md`).
+
+## Phase 8 — Finish the shell: the failure surface, empty states, and the polish pass
+
+*Deps: 5 (the toast reports what the save and selection paths return) and 7 (the last phase to change the
+shell's markup). This is the first half of the old "polish, guardrails and packaging" phase, split on
+2026-10-07 because the two halves have incompatible verification channels: this one is probe-driven, and the
+packaged-app half cannot be — `window.__notesEditor` is assigned only when the channel is `dev` (SPEC §10.1),
+so a canary build has no readable editor at all. That half is Phase 9.*
+
+*Status: **ready to start — pre-flighted 2026-10-07.** Deps are green and nothing needs installing: every
+surface it touches already exists (`#mutation-error`, `#notes-empty`, `#editor-placeholder`, the status bar's
+path field), and the two package calls it needs are present in the pinned `electrobun@1.18.1`
+(`Utils.showItemInFolder`, `Utils.showMessageBox` — measured). The pre-flight closed four gaps: the toast had
+**no** hook in §10.6 (this phase adds the app's failure surface, and §10.6's own rule is that a hook is pinned
+before a check uses it), the single verification block had three lines for fourteen tasks, four items were
+open "Decide:" choices rather than rulings, and one acceptance line contradicted the item it was meant to
+check (`deleteNote` vs "deleting a note … produces a visible message"). All nine decisions below are
+**pinned, not open**: implement them as written, because the checks cannot be judged without them. Nothing
+here touches `debug.md` — the two dev-only wedge switches stay until that investigation closes (Phase 9).*
+
+*Files:* `src/mainview/components/Toast/{Toast.tsx, Toast.controller.ts, Toast.types.ts}` (new — the app has
+no toast today), `src/mainview/components/NoteContextMenu/` (new, mirroring `FolderContextMenu`),
+`src/mainview/utils/mutationMessage.ts` + `mutationMessage.test.ts` (new; pure, and unit-tested per CODE_STYLE
+§14.2), `src/mainview/index.html` (the pre-paint script), `src/mainview/styles.css` (`:root`'s
+`color-scheme`), `src/mainview/components/NotesPanel/NotesPanel.tsx` (`data-empty-reason`),
+`src/mainview/components/StatusBar/StatusBar.tsx` (drop `data-theme-value`), `src/shared/types.ts` +
+`src/bun/notes/*` + `src/bun/index.ts` (§7's `revealNote` handler and the message-box call),
+`src/bun/phase8Probe.ts` (new dev-only check module, chained after `phase7Probe` behind `PROBE8_ONLY=1`,
+seeding `Probe8/` and removing it in `finally`).
+*Retires:* the unread `data-theme-value` attribute on `#status-bar` (§10.6), SPEC §10.5's Phase-4 placeholder
+sentence (which Phase 7's *Retires:* line claimed and did not land — the spec now marks it historical), and
+`#mutation-error`'s role as *the* failure surface: the element stays as the sidebar's inline detail, but the
+user-facing message moves to `#toast`.
+
+*Decisions — pinned 2026-10-07 (each is rule + reason + the alternative it beat).*
+1. **`#toast` is the app's only failure surface**, one message at a time (replaced, never stacked),
+   auto-dismissed after ~4 s with the node removed, `data-tone` (`error` | `info`) and `data-message` (the
+   §9.1 code) on it, `role="alert"` for errors. *Reason:* §7 and §10.5 already promise it by name, and a
+   second inline `<p>` per component is the drift class §10.6 exists to prevent. *Beat:* keeping
+   `#mutation-error` as the only channel — a refused drag then has nowhere to land that a check can read.
+2. **Bun keeps the five §9.1 codes; the renderer names the subject.** The layer returns
+   `not found` / `invalid id` / `invalid name` / `already exists` / `folder not empty` unchanged, and one
+   pure function, `mutationMessage(action, subject, code)`, turns a code plus what failed into a sentence
+   ("Couldn't move *plan* to *Ideas* — not found"). *Reason:* it is unit-testable under `bun test`, it is the
+   single place the wording lives, and the toast carries the code so a check asserts the mapping rather than
+   punctuation. *Beat:* prose-shaped strings from bun (a second vocabulary to keep in step) and a
+   `try`/`catch` per call site.
+3. **`deleteNote` becomes reachable through a note-row context menu** (`#note-context-menu`, §10.2), with the
+   delete confirming through `showMessageBox` and cancelling by default. *Reason:* the method has been wired
+   end to end since Phase 3 with no caller, and this phase's own checks want a visible message for a delete —
+   "reachable" is the cheaper of the two ways to make that true. *Beat:* dropping it, which deletes a shipped
+   RPC method (§7) and rewrites the check.
+4. **"Reveal in Finder" is the menu's second item**, calling §7's new `revealNote` and handing the absolute
+   path to `Utils.showItemInFolder`. *Reason:* the measured complaint is that the app's author could not find
+   his own notes — the data sits under a hidden `~/Library`, keyed by identifier, channel and slug. *Beat:*
+   documenting the path in prose; a hidden directory stays hidden, and the path depends on the channel.
+5. **A draft whose folder vanished stays a draft and says so.** Re-validate the captured folder at commit
+   time; on `not found` the toast names the folder, the draft keeps its text, and the selection falls back to
+   All Notes. *Reason:* today that path fails with the bare `not found` *and* leaves a stale selection, so the
+   list looks empty — two confusions from one refusal. *Beat:* re-creating the missing folder, or dropping
+   the draft, which loses typed text.
+6. **Empty states are one primitive with a reason.** `#notes-empty` carries `data-empty-reason`
+   (`no-notes` | `folder-empty` | `no-matches`); the editor placeholder keeps its single wording. *Reason:*
+   all three cases currently render the same element, so no check can tell "nothing here" from "nothing
+   matched", and the copy differs per case. *Beat:* three elements with three hooks.
+7. **First paint resolves the theme before the bundle runs, and its proof is split in two.** `index.html`
+   gets a small inline script that reads `mynoteappv2.theme` (else `prefers-color-scheme`) and sets
+   `data-theme` before the module loads, with `color-scheme` on `:root`; the shell's effect then writes only
+   when the value differs. The proof: the resolver is a pure function unit-tested under `bun test`, a probe
+   asserts the attribute is already correct at the first readable instant and that the effect does not
+   re-write it, and **the one-frame flash itself is a manual line** — a timing artifact no probe can see.
+   *Reason:* SPEC §10.5/§10.6 already promise the flash is this phase's job, and the split is what keeps the
+   automated half honest. *Beat:* a probe line that claims to have measured a frame nobody looked at.
+8. **The accessibility pass is split the same way.** Automated: every interactive control is a real
+   `<button>`/`<a>` with a non-empty accessible name (read from the AX tree), no visible control carries
+   `tabindex="-1"`, and `alt` text exists on every image the shell renders. Manual: the keyboard walk.
+   *Reason:* a synthetic `Tab` keydown does not move focus in this webview, so a probe cannot test tab order
+   — saying that out loud is cheaper than a check that always passes. *Beat:* asserting "tab order is
+   correct" from a keydown nobody acted on.
+9. **A Mermaid diagram following the theme is accepted and documented, not fixed.** SPEC §11 gains the
+   accepted limitation and §14 lists the fix as post-MVP. *Reason:* the package initialises `mermaid` once at
+   import with hardcoded light variables and exposes no option; the fix is re-initialising the package's own
+   instance per theme and re-rendering open diagrams — fighting package internals for a surface the theme
+   rule never covered (it covers the hybrid preview, which follows). *Beat:* a silent mismatch a reader
+   rediscovers as a bug.
+
+- [ ] `Toast/` — the component, controller and types behind decision 1: one message, `data-tone`,
+      `data-message`, `role="alert"` on errors, the ~4 s dismissal, and the node removed (not hidden) when
+      nothing is showing.
+- [ ] `mutationMessage.ts` (+ its test) — decision 2's mapping: one entry per §9.1 code, a sentence that
+      names the subject, and no code string reachable by the user.
+- [ ] `NoteContextMenu/` — decisions 3 and 4: `Delete note` (confirm → `deleteNote` → toast) and
+      `Reveal in Finder` (`revealNote` → `showItemInFolder`), opened from a note row, closed by Escape and
+      by selecting elsewhere, and built like `FolderContextMenu` (a real `<button>` list, disabled
+      **property** for a refusal, element removed rather than hidden on close).
+- [ ] `revealNote` end to end — §7's request is *pinned but not implemented*: schema, handler on
+      `NOTEBOOK_DIR`, the same id validation and containment check `openNote` uses, and a refusal
+      (`ok: false, invalid id`) for anything resolving outside the notebook.
+- [ ] Decision 5's draft path in `EditorPane.controller.ts` / the sidebar's draft store: re-validate at
+      commit, keep the text, toast the reason, fall back to All Notes.
+- [ ] `data-empty-reason` on `#notes-empty` (decision 6) and the copy per reason.
+- [ ] The pre-paint script in `index.html` + `:root`'s `color-scheme` + the pure resolver (decision 7), with
+      the shell's effect made a no-op when the attribute already matches.
+- [ ] The automated half of decision 8: real controls, accessible names, no hidden-but-visible tab stops,
+      `alt` text — and no assertion about tab order, manual or otherwise, beyond the walk in line 12.
+- [ ] Remove `data-theme-value` from `StatusBar.tsx` (§10.6 says Phase 8 removes it) and drop the §10.6
+      sentence that mentions it.
+- [ ] **Re-run the grep guardrails** — no `electrobun/bun` or `node:*` import under `src/mainview/`, no sync
+      `fs` in `src/bun/`, no RPC client reference outside `rpc.ts` + `services/`. *(All three already return
+      zero hits as of 2026-10-07 — this is a re-run to record, not work to do, and the Outcome says so.)*
+- [ ] **The SPEC §15 audit, as a report**: walk items 1–23, record `holds` / `n/a` / `gap` per item in the
+      Outcome. No code is expected from it; a `gap` becomes a new item here rather than a silent pass.
+- [ ] `bun run type-check` + `bun run test` green (a bare `tsc --noEmit` cannot pass here — SPEC §15.15),
+      with the counts recorded in the Outcome. Storybook only where CODE_STYLE §14 requires it (§14.3 is a
+      SHOULD; the two new component directories are presentational enough to qualify, and the toast is the
+      one with a stateful story worth having).
+
+**Verification** — automated through `phase8Probe.ts` unless marked *(manual)*. The probe drives the real
+UI (a note opened first: the menu and the mutation paths need one), reads the DOM for the shell's hooks and
+`window.__notesEditor` for the document, and reads the disk as the oracle for a write. Each refusal is forced
+through a real path — `invalid id` and `not found` from a stale id, `invalid name` from a name with `/`,
+`already exists` from a duplicate folder, `folder not empty` from a non-empty delete — so no line asserts a
+mapping from a fixture that never entered it.
+
+1. A refused mutation raises `#toast` with `data-tone="error"` and a `data-message` equal to the §9.1 code
+   the handler returned, its text naming the subject that failed, and no code string visible to the user.
+   *(One reading per code, in the order above.)*
+2. The toast replaces rather than stacks (two refusals in a row leave exactly one `#toast`), removes itself
+   after the dismiss window, and leaves no node behind. *Failure:* a toast list growing on the page.
+3. `Delete note` from the menu removes the `.md` from the notebook and toasts; **cancelling the confirm
+   removes nothing and leaves the row selected**. *(The confirm box is a native dialog the probe cannot
+   click: the check drives the request/refusal path, and the click itself is line 12's manual half.)*
+4. `Reveal in Finder` issues `revealNote` with the note's absolute path inside the notebook; an id that
+   resolves outside it is refused (`ok: false`) and the FFI call is never made. *(The FFI call is stubbed at
+   the handler boundary so no Finder window opens during a run.)*
+5. A draft whose folder vanished at commit time keeps its text in the editor, toasts a message naming the
+   folder, and re-selects All Notes — with the file written nowhere. *(The folder is deleted out of band
+   between `+` and the commit, and the probe pushes `noteChanged` after that disk change — §9.1's rule for
+   out-of-band edits.)*
+6. `data-empty-reason` reads `no-notes` → `folder-empty` → `no-matches` in sequence on a fresh notebook, and
+   the element is absent while the list has rows. *Failure:* the same wording for all three.
+7. With `mynoteappv2.theme` written to `dark` out of band, a fresh run's **first** read of `<html data-theme>`
+   is `dark` and the shell's effect does not re-write the attribute. *(Two-run shape, like Phase 4's check 20:
+   the second run writes back the stored value it found, so the check restores rather than mutates.)*
+8. `:root` carries `color-scheme`, and it agrees with the `data-theme` value in both directions.
+9. Every interactive control in the shell is a real `<button>`/`<a>` with a non-empty accessible name, no
+   visible control carries `tabindex="-1"`, and every rendered image has `alt`. *(Read from the accessibility
+   tree, not from class names — the point is the name a screen reader would announce.)*
+10. `#status-bar` no longer carries `data-theme-value`, and nothing in the shell reads it. *(The removal is
+    the assertion: the attribute is gone and the status bar still renders its three fields.)*
+11. The three grep guardrails return zero hits, and the commands are pasted into the Outcome verbatim.
+12. *(manual)* Three steps no probe can hold: confirm a delete in the message box and watch the row leave the
+    list; launch with the theme set to `dark` and watch the **first frame** for a light flash; walk the tab
+    order through the toolbar and both context menus with the keyboard.
+
+**Outcome** — to be written from the run, in the shape Phases 6 and 7 use: the verbatim `[probe8]` lines, the
+full-suite `done` line, the gate counts, and any reading a later reader must not have to re-derive.
+
+## Phase 9 — Build, launch, and release truth
+
+*Deps: 8 (the shell is finished before it is packaged), plus the identity decision below, which must land
+before the first build and not after.*
+
+*Status: **scoped — pre-flighted 2026-10-07; not startable until Phase 8 is done.** This is the second half
+of the old "polish, guardrails and packaging" phase. It is **manual by construction**: the dev-only read-back
+(`window.__notesEditor`, §10.1) does not exist in a packaged build, so no probe can read the editor there —
+which is exactly why it is not stapled to Phase 8's automated block. Two measured corrections were folded in
+while scoping it: the CLI's `run` command launches the **dev** bundle and nothing else (`runApp` hardcodes
+`buildEnvironment = "dev"`, `src/cli/index.ts`, measured 2026-10-07), and the canary build reads a *different*
+notebook directory from dev's, because `Utils.paths.userData` is
+`getAppDataDir()/identifier/channel` — so the old line "opens the same notebook directory" could not pass as
+written. Both are now steps below with their expected observations.*
+
+*Files:* `electrobun.config.ts` and `package.json` (the identity pair), `src/bun/index.ts` only where the
+diagnostics are removed. This phase writes almost no product code; its deliverables are a packaged app and an
+honest report of what a packaged app can and cannot do.
+
+*Retires:* the two dev-only wedge switches (`HEARTBEAT=1` hash stream, `POKE=1` native poke), their
+`viewContext.heartbeat` plumbing and SPEC §10.6's wedge-diagnostic paragraph — **gated on `debug.md` closing**,
+see decision 5. Also retires `lessons.md`'s "build:canary / build:stable — never run for this project" entry,
+by making it false.
+
+*Decisions — pinned 2026-10-07.*
+1. **The identity lands before the first build.** `Notes` / `com.example.notes` are placeholders and must be
+   replaced here (§4.1's pin). *Reason:* the identifier decides `userData` — the notebook directory — and the
+   `views://` origin that holds the theme, so a package built under the placeholder is a package whose data
+   location is a placeholder too. *Beat:* shipping canary under `com.example.notes` and changing it later,
+   which moves every user's notebook without a migration.
+2. **A packaged build is launched from its own path.** `bun run build:canary` → `open
+   build/canary-macos-arm64/Notes-canary.app`; `electrobun run` is *not* used (it hardcodes the dev bundle —
+   §15.10). *Reason:* the check exists to ask whether the *packaged* app works; `run` answers a different
+   question. *Beat:* the old wording, which would have tested the dev bundle and called it a package.
+3. **The canary notebook is expected to be empty, and that is the point of one of the steps.** The packaged
+   app reads `~/Library/Application Support/<identifier>/canary/notebook/`, so its first launch is a first-run
+   experience, and the dev notebook proves untouched afterwards. *Reason:* "two apps share one notebook" is
+   the failure shape this rule prevents, and it is the same rule §4.1's identity pin depends on. *Beat:*
+   asserting the app opens an existing notebook and being unable to say which directory was read.
+4. **`bundleCEF` stays `false` on all three OSes** (§4.1). *Reason:* the native webview is what every measured
+   behaviour in `lessons.md` was taken against, and CEF would add a large payload to the bundle for no MVP
+   feature. *Beat:* flipping it as a fix for the wedge — CEF is a different transport, so it is the *first
+   experiment* if the wedge is ever traced there, not a config change made on the way to a release.
+5. **The diagnostics retire when `debug.md` closes, not on a date.** Removal is gated on X5 (the direction
+   probe) and X7 (the electrobun source read + upstream sweep) being answered, because X1's liveness
+   discriminator *is* the hash stream — removing it first deletes the instrument the investigation runs on.
+   *Reason:* both switches are gated on the `dev` channel *and* an env switch, so a packaged build cannot
+   reach them: their removal is dev-code hygiene, never a release risk, and there is no reason to rush it.
+   *Beat:* "MVP is complete, so remove them", which is what the old phase said — it would have deleted the
+   instrument while the investigation it exists for is still open.
+6. **Signing and notarization are explicitly out of scope.** The packaged app is launched locally, unsigned.
+   *Reason:* `lessons.md` already records that packaging needs identities this project does not have, and the
+   MVP question is "does the built app work", not "can it be distributed". §14 carries the deferral. *Beat:*
+   pursuing notarization inside a verification phase and turning a browser-run into a credentials task.
+
+- [ ] Identity: `electrobun.config.ts` (`app.name`, `app.identifier`, `app.version`) and `package.json`
+      (`name`, `version`) agree, and the placeholder pair is gone.
+- [ ] `bun run build:canary` produces the bundle, and the **dev** bundle under `build/dev-*` is untouched by
+      it (recorded with `ls`/mtimes, not by assumption).
+- [ ] Launch the packaged app and run the six steps in the manual block below, recording each observation.
+- [ ] `bundleCEF: false` confirmed against the built bundle (no CEF framework shipped) and the app still
+      renders the hybrid editor.
+- [ ] The diagnostics half of decision 5: either `debug.md` is closed and the switches, the
+      `viewContext.heartbeat` field and §10.6's paragraph are removed in one commit — or the item is left
+      **open here with the reason**, rather than silently dropping it. *(`debug.md`'s state at the time this
+      was written: open.)*
+- [ ] `lessons.md`: strike the "never run for this project" entry and record what the first packaged run
+      actually did, including the channel-scoped notebook path.
+
+**Verification** — **manual, by construction** (the dev read-back does not exist in a packaged build), in the
+shape the human verifier asks for: one step, the exact observation, and the failure signature. Run them in
+order; a failure stops the run, because each step's precondition is the previous step's observation.
+
+1. `bun run build:canary` → expect the bundle at `build/canary-macos-arm64/Notes-canary.app` and a fresh
+   archive in `artifacts/`; expect **no** signing/notarization step to be attempted, and `build/dev-*` to keep
+   its previous mtime. *Failure:* the build reports success while nothing appeared under `build/canary-*`; or
+   a `codesign`/notarization error, which means decision 6 has been crossed.
+2. `open build/canary-macos-arm64/Notes-canary.app` → expect the window to open with an **empty** notes list
+   (a first run), and the directory `~/Library/Application Support/<identifier>/canary/notebook/` to exist
+   afterwards. *Failure:* the list shows the dev notebook's notes — the identity change did not take.
+3. Create a note, type into the body, wait a moment past the 500 ms save debounce, then quit → expect exactly
+   one `.md` in the canary notebook directory, named after the slugged title, holding the typed text. *Failure:*
+   nothing on disk, or the file is empty/renamed.
+4. Relaunch the packaged app → expect the note in the list with its title and preview, and its body intact
+   when opened. *Failure:* the note is missing — which, after step 3's file was confirmed, points at the
+   channel-scoped path rather than at the list.
+5. `ls` the dev notebook before and after steps 2–4 → expect it byte-identical. *Failure:* the packaged app
+   wrote into the dev directory (they are sharing `userData`).
+6. Inspect the bundle: no CEF framework under `Contents/Frameworks`, and the hybrid editor still renders
+   markdown (type `# h` and confirm the rendered heading). *Failure:* a missing framework the app needs, or a
+   renderer that no longer mounts.
+7. `HEARTBEAT=1 POKE=1 open …Notes-canary.app` → expect **no** `[hash] hb-…` line anywhere in the run's
+   output: both channels are dev-gated (§10.6), so a packaged build cannot reach them. *Failure:* the leak
+   itself, not the missing lines — a package that ships the diagnostics is the bug this step exists for.
+8. Recorded fact, not a step to pass: `electrobun run` after a canary build launches
+   `build/dev-macos-arm64/Notes-dev.app`. That is the CLI's behaviour (§15.10), it is why step 2 uses `open`,
+   and a future reader who "fixes" step 2 back to `run` should find this sentence.
 
 ---
 

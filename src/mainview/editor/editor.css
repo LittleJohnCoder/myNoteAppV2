@@ -63,6 +63,12 @@
   outline: none;
 }
 
+/* Nothing to edit: the host stays mounted (the CodeMirror view lives inside it) but takes no space
+   and accepts no clicks, so the empty state is a message rather than a field that discards input. */
+.editor__host_hidden {
+  display: none;
+}
+
 .editor__error {
   margin: 0 var(--space-3) var(--space-2);
   color: var(--color-danger);
