@@ -906,61 +906,260 @@ check's `observed` as "not observed" via `readObject` (check 10 first threw `und
 instead), and every check is given a 200 ms beat — this probe fires reads far faster than the phases that
 drive the real UI, and the transport is measured to go quiet on long chatty runs (`lessons.md`).
 
-## Phase 8 — Polish, guardrails, and packaging
+## Phase 8 — Finish the shell: the failure surface, empty states, and the polish pass
 
-*Deps: 1–7. Last-mile; the v1 roadmap never reached here.*
+*Deps: 5 (the toast reports what the save and selection paths return) and 7 (the last phase to change the
+shell's markup). This is the first half of the old "polish, guardrails and packaging" phase, split on
+2026-10-07 because the two halves have incompatible verification channels: this one is probe-driven, and the
+packaged-app half cannot be — `window.__notesEditor` is assigned only when the channel is `dev` (SPEC §10.1),
+so a canary build has no readable editor at all. That half is Phase 9.*
 
-- [ ] Empty states (no notes, no folder selected, empty folder) and a shared load-or-render primitive.
-- [ ] A failed mutation (`{ ok: false, error }`, SPEC §9.1) and every RPC rejection surface as a
-      visible toast — nothing swallowed silently.
-- [ ] Keyboard/UX pass: tab order, focus rings, accessible controls (real `<button>`/`<a>`, `alt` text).
-- [ ] First paint: `index.html` hardcodes `data-theme="light"`, so a dark-theme user sees one light frame
-      before the shell applies the stored value (SPEC §10.5, §10.6). Set `color-scheme` on `:root` and read
-      the stored theme before first paint.
-- [ ] Remove the unread `data-theme-value` attribute on `#status-bar` (SPEC §10.6).
-- [ ] Audit against the SPEC §15 gotcha list, item by item (async handlers, no `views/` writes, pinned
-      version, `Utils.paths.userData` for data, Edit accelerators present).
-- [ ] Grep guardrails: no `electrobun/bun` or `node:*` import under `src/mainview/`; no sync `fs` in
-      `src/bun/`; no RPC client reference outside `rpc.ts` + `services/`.
-- [ ] `bun run type-check` + `bun run test` clean (a bare `tsc --noEmit` cannot pass here — SPEC
-      §15.15); storybook only where CODE_STYLE §14 requires it.
-- [ ] `bun run build:canary` → `electrobun run` on the built app; decide `bundleCEF` per OS.
-- [ ] **Remove the SPEC §10.6 wedge diagnostics at MVP completion** (`HEARTBEAT=1` hash stream and
-      `POKE=1` native poke). Added 2026-10-06 as provisional instrumentation for the `debug.md`
-      investigation; the ruling was "permanent until MVP is complete", so their removal is this
-      phase's job, not a leftover's. While they live, `debug.md` §0 is their recipe.
-- [ ] **Give notes a way to be found on disk.** Measured 2026-10-06: the app's own author could not
-      locate two freshly created notes. The data lives at
-      `~/Library/Application Support/com.example.notes/<channel>/notebook/` — under a **hidden**
-      `~/Library`, keyed by user *and* channel, with the filename being the **slug** of the title
-      (lowercase, `[a-z0-9]` only), never the title as typed. Decide: a Reveal-in-Finder action (note
-      row or status-bar path), or a documented location, or accept it explicitly.
-- [ ] **Make `deleteNote` reachable, or drop it.** It is wired end to end (schema → handler →
-      `services/notes.service.ts`) and **nothing in the renderer calls it** — §10.2 gives the notes
-      list no context menu — yet this phase's own verification expects "deleting a note … produce[s]
-      a visible message". One of the two statements has to give.
-- [ ] **Give failure messages context.** A refused mutation currently renders the bare §9.1 string —
-      the same day's session surfaced only `not found` when `+` aimed a draft at a folder that no
-      longer existed. The message should name the thing that failed (id, folder, or action).
-- [ ] **Decide what a draft does when its target folder vanishes** (it captures the selected folder
-      when `+` is pressed; if that folder is gone, the create fails with the bare `not found` above,
-      and because the selection went stale the list looks empty too).
-- [ ] **Make a Mermaid diagram follow the theme, or accept that it does not.** Measured 2026-10-06
-      (Phase 6 Outcome): the hybrid package calls `mermaid.initialize` once at import with hardcoded
-      **light** theme variables (`primaryColor #f5f5f5`, `edgeLabelBackground #fff`, `lineColor #aaa`),
-      and no option exposes them — so a diagram renders white-ish in dark mode while the rest of the
-      pane follows `<html data-theme>`. A fix means the app tapping the package's `mermaid` instance and
-      re-initializing it per theme (then re-rendering the open note's diagrams), which is why it is a
-      polish item and not part of Phase 6's verification: Phase 6's line 7 asks the *preview* to follow
-      the theme, and it does — a diagram is the one rendered surface that does not. Decide: fix, or
-      accept it explicitly and document the limitation for the reader.
+*Status: **ready to start — pre-flighted 2026-10-07.** Deps are green and nothing needs installing: every
+surface it touches already exists (`#mutation-error`, `#notes-empty`, `#editor-placeholder`, the status bar's
+path field), and the two package calls it needs are present in the pinned `electrobun@1.18.1`
+(`Utils.showItemInFolder`, `Utils.showMessageBox` — measured). The pre-flight closed four gaps: the toast had
+**no** hook in §10.6 (this phase adds the app's failure surface, and §10.6's own rule is that a hook is pinned
+before a check uses it), the single verification block had three lines for fourteen tasks, four items were
+open "Decide:" choices rather than rulings, and one acceptance line contradicted the item it was meant to
+check (`deleteNote` vs "deleting a note … produces a visible message"). All nine decisions below are
+**pinned, not open**: implement them as written, because the checks cannot be judged without them. Nothing
+here touches `debug.md` — the two dev-only wedge switches stay until that investigation closes (Phase 9).*
 
-**Verification**
-- Deleting a note, deleting a non-empty folder, and reading a note that vanished underneath the app
-  each produce a visible message instead of a silent no-op or a console-only error.
-- The grep guardrails return zero hits.
-- The built canary app launches from `build/`, opens the same notebook directory, and can create,
-  edit and save a note — i.e. it is not only the dev loop that works.
+*Files:* `src/mainview/components/Toast/{Toast.tsx, Toast.controller.ts, Toast.types.ts}` (new — the app has
+no toast today), `src/mainview/components/NoteContextMenu/` (new, mirroring `FolderContextMenu`),
+`src/mainview/utils/mutationMessage.ts` + `mutationMessage.test.ts` (new; pure, and unit-tested per CODE_STYLE
+§14.2), `src/mainview/index.html` (the pre-paint script), `src/mainview/styles.css` (`:root`'s
+`color-scheme`), `src/mainview/components/NotesPanel/NotesPanel.tsx` (`data-empty-reason`),
+`src/mainview/components/StatusBar/StatusBar.tsx` (drop `data-theme-value`), `src/shared/types.ts` +
+`src/bun/notes/*` + `src/bun/index.ts` (§7's `revealNote` handler and the message-box call),
+`src/bun/phase8Probe.ts` (new dev-only check module, chained after `phase7Probe` behind `PROBE8_ONLY=1`,
+seeding `Probe8/` and removing it in `finally`).
+*Retires:* the unread `data-theme-value` attribute on `#status-bar` (§10.6), SPEC §10.5's Phase-4 placeholder
+sentence (which Phase 7's *Retires:* line claimed and did not land — the spec now marks it historical), and
+`#mutation-error`'s role as *the* failure surface: the element stays as the sidebar's inline detail, but the
+user-facing message moves to `#toast`.
+
+*Decisions — pinned 2026-10-07 (each is rule + reason + the alternative it beat).*
+1. **`#toast` is the app's only failure surface**, one message at a time (replaced, never stacked),
+   auto-dismissed after ~4 s with the node removed, `data-tone` (`error` | `info`) and `data-message` (the
+   §9.1 code) on it, `role="alert"` for errors. *Reason:* §7 and §10.5 already promise it by name, and a
+   second inline `<p>` per component is the drift class §10.6 exists to prevent. *Beat:* keeping
+   `#mutation-error` as the only channel — a refused drag then has nowhere to land that a check can read.
+2. **Bun keeps the five §9.1 codes; the renderer names the subject.** The layer returns
+   `not found` / `invalid id` / `invalid name` / `already exists` / `folder not empty` unchanged, and one
+   pure function, `mutationMessage(action, subject, code)`, turns a code plus what failed into a sentence
+   ("Couldn't move *plan* to *Ideas* — not found"). *Reason:* it is unit-testable under `bun test`, it is the
+   single place the wording lives, and the toast carries the code so a check asserts the mapping rather than
+   punctuation. *Beat:* prose-shaped strings from bun (a second vocabulary to keep in step) and a
+   `try`/`catch` per call site.
+3. **`deleteNote` becomes reachable through a note-row context menu** (`#note-context-menu`, §10.2), with the
+   delete confirming through `showMessageBox` and cancelling by default. *Reason:* the method has been wired
+   end to end since Phase 3 with no caller, and this phase's own checks want a visible message for a delete —
+   "reachable" is the cheaper of the two ways to make that true. *Beat:* dropping it, which deletes a shipped
+   RPC method (§7) and rewrites the check.
+4. **"Reveal in Finder" is the menu's second item**, calling §7's new `revealNote` and handing the absolute
+   path to `Utils.showItemInFolder`. *Reason:* the measured complaint is that the app's author could not find
+   his own notes — the data sits under a hidden `~/Library`, keyed by identifier, channel and slug. *Beat:*
+   documenting the path in prose; a hidden directory stays hidden, and the path depends on the channel.
+5. **A draft whose folder vanished stays a draft and says so.** Re-validate the captured folder at commit
+   time; on `not found` the toast names the folder, the draft keeps its text, and the selection falls back to
+   All Notes. *Reason:* today that path fails with the bare `not found` *and* leaves a stale selection, so the
+   list looks empty — two confusions from one refusal. *Beat:* re-creating the missing folder, or dropping
+   the draft, which loses typed text.
+6. **Empty states are one primitive with a reason.** `#notes-empty` carries `data-empty-reason`
+   (`no-notes` | `folder-empty` | `no-matches`); the editor placeholder keeps its single wording. *Reason:*
+   all three cases currently render the same element, so no check can tell "nothing here" from "nothing
+   matched", and the copy differs per case. *Beat:* three elements with three hooks.
+7. **First paint resolves the theme before the bundle runs, and its proof is split in two.** `index.html`
+   gets a small inline script that reads `mynoteappv2.theme` (else `prefers-color-scheme`) and sets
+   `data-theme` before the module loads, with `color-scheme` on `:root`; the shell's effect then writes only
+   when the value differs. The proof: the resolver is a pure function unit-tested under `bun test`, a probe
+   asserts the attribute is already correct at the first readable instant and that the effect does not
+   re-write it, and **the one-frame flash itself is a manual line** — a timing artifact no probe can see.
+   *Reason:* SPEC §10.5/§10.6 already promise the flash is this phase's job, and the split is what keeps the
+   automated half honest. *Beat:* a probe line that claims to have measured a frame nobody looked at.
+8. **The accessibility pass is split the same way.** Automated: every interactive control is a real
+   `<button>`/`<a>` with a non-empty accessible name (read from the AX tree), no visible control carries
+   `tabindex="-1"`, and `alt` text exists on every image the shell renders. Manual: the keyboard walk.
+   *Reason:* a synthetic `Tab` keydown does not move focus in this webview, so a probe cannot test tab order
+   — saying that out loud is cheaper than a check that always passes. *Beat:* asserting "tab order is
+   correct" from a keydown nobody acted on.
+9. **A Mermaid diagram following the theme is accepted and documented, not fixed.** SPEC §11 gains the
+   accepted limitation and §14 lists the fix as post-MVP. *Reason:* the package initialises `mermaid` once at
+   import with hardcoded light variables and exposes no option; the fix is re-initialising the package's own
+   instance per theme and re-rendering open diagrams — fighting package internals for a surface the theme
+   rule never covered (it covers the hybrid preview, which follows). *Beat:* a silent mismatch a reader
+   rediscovers as a bug.
+
+- [ ] `Toast/` — the component, controller and types behind decision 1: one message, `data-tone`,
+      `data-message`, `role="alert"` on errors, the ~4 s dismissal, and the node removed (not hidden) when
+      nothing is showing.
+- [ ] `mutationMessage.ts` (+ its test) — decision 2's mapping: one entry per §9.1 code, a sentence that
+      names the subject, and no code string reachable by the user.
+- [ ] `NoteContextMenu/` — decisions 3 and 4: `Delete note` (confirm → `deleteNote` → toast) and
+      `Reveal in Finder` (`revealNote` → `showItemInFolder`), opened from a note row, closed by Escape and
+      by selecting elsewhere, and built like `FolderContextMenu` (a real `<button>` list, disabled
+      **property** for a refusal, element removed rather than hidden on close).
+- [ ] `revealNote` end to end — §7's request is *pinned but not implemented*: schema, handler on
+      `NOTEBOOK_DIR`, the same id validation and containment check `openNote` uses, and a refusal
+      (`ok: false, invalid id`) for anything resolving outside the notebook.
+- [ ] Decision 5's draft path in `EditorPane.controller.ts` / the sidebar's draft store: re-validate at
+      commit, keep the text, toast the reason, fall back to All Notes.
+- [ ] `data-empty-reason` on `#notes-empty` (decision 6) and the copy per reason.
+- [ ] The pre-paint script in `index.html` + `:root`'s `color-scheme` + the pure resolver (decision 7), with
+      the shell's effect made a no-op when the attribute already matches.
+- [ ] The automated half of decision 8: real controls, accessible names, no hidden-but-visible tab stops,
+      `alt` text — and no assertion about tab order, manual or otherwise, beyond the walk in line 12.
+- [ ] Remove `data-theme-value` from `StatusBar.tsx` (§10.6 says Phase 8 removes it) and drop the §10.6
+      sentence that mentions it.
+- [ ] **Re-run the grep guardrails** — no `electrobun/bun` or `node:*` import under `src/mainview/`, no sync
+      `fs` in `src/bun/`, no RPC client reference outside `rpc.ts` + `services/`. *(All three already return
+      zero hits as of 2026-10-07 — this is a re-run to record, not work to do, and the Outcome says so.)*
+- [ ] **The SPEC §15 audit, as a report**: walk items 1–23, record `holds` / `n/a` / `gap` per item in the
+      Outcome. No code is expected from it; a `gap` becomes a new item here rather than a silent pass.
+- [ ] `bun run type-check` + `bun run test` green (a bare `tsc --noEmit` cannot pass here — SPEC §15.15),
+      with the counts recorded in the Outcome. Storybook only where CODE_STYLE §14 requires it (§14.3 is a
+      SHOULD; the two new component directories are presentational enough to qualify, and the toast is the
+      one with a stateful story worth having).
+
+**Verification** — automated through `phase8Probe.ts` unless marked *(manual)*. The probe drives the real
+UI (a note opened first: the menu and the mutation paths need one), reads the DOM for the shell's hooks and
+`window.__notesEditor` for the document, and reads the disk as the oracle for a write. Each refusal is forced
+through a real path — `invalid id` and `not found` from a stale id, `invalid name` from a name with `/`,
+`already exists` from a duplicate folder, `folder not empty` from a non-empty delete — so no line asserts a
+mapping from a fixture that never entered it.
+
+1. A refused mutation raises `#toast` with `data-tone="error"` and a `data-message` equal to the §9.1 code
+   the handler returned, its text naming the subject that failed, and no code string visible to the user.
+   *(One reading per code, in the order above.)*
+2. The toast replaces rather than stacks (two refusals in a row leave exactly one `#toast`), removes itself
+   after the dismiss window, and leaves no node behind. *Failure:* a toast list growing on the page.
+3. `Delete note` from the menu removes the `.md` from the notebook and toasts; **cancelling the confirm
+   removes nothing and leaves the row selected**. *(The confirm box is a native dialog the probe cannot
+   click: the check drives the request/refusal path, and the click itself is line 12's manual half.)*
+4. `Reveal in Finder` issues `revealNote` with the note's absolute path inside the notebook; an id that
+   resolves outside it is refused (`ok: false`) and the FFI call is never made. *(The FFI call is stubbed at
+   the handler boundary so no Finder window opens during a run.)*
+5. A draft whose folder vanished at commit time keeps its text in the editor, toasts a message naming the
+   folder, and re-selects All Notes — with the file written nowhere. *(The folder is deleted out of band
+   between `+` and the commit, and the probe pushes `noteChanged` after that disk change — §9.1's rule for
+   out-of-band edits.)*
+6. `data-empty-reason` reads `no-notes` → `folder-empty` → `no-matches` in sequence on a fresh notebook, and
+   the element is absent while the list has rows. *Failure:* the same wording for all three.
+7. With `mynoteappv2.theme` written to `dark` out of band, a fresh run's **first** read of `<html data-theme>`
+   is `dark` and the shell's effect does not re-write the attribute. *(Two-run shape, like Phase 4's check 20:
+   the second run writes back the stored value it found, so the check restores rather than mutates.)*
+8. `:root` carries `color-scheme`, and it agrees with the `data-theme` value in both directions.
+9. Every interactive control in the shell is a real `<button>`/`<a>` with a non-empty accessible name, no
+   visible control carries `tabindex="-1"`, and every rendered image has `alt`. *(Read from the accessibility
+   tree, not from class names — the point is the name a screen reader would announce.)*
+10. `#status-bar` no longer carries `data-theme-value`, and nothing in the shell reads it. *(The removal is
+    the assertion: the attribute is gone and the status bar still renders its three fields.)*
+11. The three grep guardrails return zero hits, and the commands are pasted into the Outcome verbatim.
+12. *(manual)* Three steps no probe can hold: confirm a delete in the message box and watch the row leave the
+    list; launch with the theme set to `dark` and watch the **first frame** for a light flash; walk the tab
+    order through the toolbar and both context menus with the keyboard.
+
+**Outcome** — to be written from the run, in the shape Phases 6 and 7 use: the verbatim `[probe8]` lines, the
+full-suite `done` line, the gate counts, and any reading a later reader must not have to re-derive.
+
+## Phase 9 — Build, launch, and release truth
+
+*Deps: 8 (the shell is finished before it is packaged), plus the identity decision below, which must land
+before the first build and not after.*
+
+*Status: **scoped — pre-flighted 2026-10-07; not startable until Phase 8 is done.** This is the second half
+of the old "polish, guardrails and packaging" phase. It is **manual by construction**: the dev-only read-back
+(`window.__notesEditor`, §10.1) does not exist in a packaged build, so no probe can read the editor there —
+which is exactly why it is not stapled to Phase 8's automated block. Two measured corrections were folded in
+while scoping it: the CLI's `run` command launches the **dev** bundle and nothing else (`runApp` hardcodes
+`buildEnvironment = "dev"`, `src/cli/index.ts`, measured 2026-10-07), and the canary build reads a *different*
+notebook directory from dev's, because `Utils.paths.userData` is
+`getAppDataDir()/identifier/channel` — so the old line "opens the same notebook directory" could not pass as
+written. Both are now steps below with their expected observations.*
+
+*Files:* `electrobun.config.ts` and `package.json` (the identity pair), `src/bun/index.ts` only where the
+diagnostics are removed. This phase writes almost no product code; its deliverables are a packaged app and an
+honest report of what a packaged app can and cannot do.
+
+*Retires:* the two dev-only wedge switches (`HEARTBEAT=1` hash stream, `POKE=1` native poke), their
+`viewContext.heartbeat` plumbing and SPEC §10.6's wedge-diagnostic paragraph — **gated on `debug.md` closing**,
+see decision 5. Also retires `lessons.md`'s "build:canary / build:stable — never run for this project" entry,
+by making it false.
+
+*Decisions — pinned 2026-10-07.*
+1. **The identity lands before the first build.** `Notes` / `com.example.notes` are placeholders and must be
+   replaced here (§4.1's pin). *Reason:* the identifier decides `userData` — the notebook directory — and the
+   `views://` origin that holds the theme, so a package built under the placeholder is a package whose data
+   location is a placeholder too. *Beat:* shipping canary under `com.example.notes` and changing it later,
+   which moves every user's notebook without a migration.
+2. **A packaged build is launched from its own path.** `bun run build:canary` → `open
+   build/canary-macos-arm64/Notes-canary.app`; `electrobun run` is *not* used (it hardcodes the dev bundle —
+   §15.10). *Reason:* the check exists to ask whether the *packaged* app works; `run` answers a different
+   question. *Beat:* the old wording, which would have tested the dev bundle and called it a package.
+3. **The canary notebook is expected to be empty, and that is the point of one of the steps.** The packaged
+   app reads `~/Library/Application Support/<identifier>/canary/notebook/`, so its first launch is a first-run
+   experience, and the dev notebook proves untouched afterwards. *Reason:* "two apps share one notebook" is
+   the failure shape this rule prevents, and it is the same rule §4.1's identity pin depends on. *Beat:*
+   asserting the app opens an existing notebook and being unable to say which directory was read.
+4. **`bundleCEF` stays `false` on all three OSes** (§4.1). *Reason:* the native webview is what every measured
+   behaviour in `lessons.md` was taken against, and CEF would add a large payload to the bundle for no MVP
+   feature. *Beat:* flipping it as a fix for the wedge — CEF is a different transport, so it is the *first
+   experiment* if the wedge is ever traced there, not a config change made on the way to a release.
+5. **The diagnostics retire when `debug.md` closes, not on a date.** Removal is gated on X5 (the direction
+   probe) and X7 (the electrobun source read + upstream sweep) being answered, because X1's liveness
+   discriminator *is* the hash stream — removing it first deletes the instrument the investigation runs on.
+   *Reason:* both switches are gated on the `dev` channel *and* an env switch, so a packaged build cannot
+   reach them: their removal is dev-code hygiene, never a release risk, and there is no reason to rush it.
+   *Beat:* "MVP is complete, so remove them", which is what the old phase said — it would have deleted the
+   instrument while the investigation it exists for is still open.
+6. **Signing and notarization are explicitly out of scope.** The packaged app is launched locally, unsigned.
+   *Reason:* `lessons.md` already records that packaging needs identities this project does not have, and the
+   MVP question is "does the built app work", not "can it be distributed". §14 carries the deferral. *Beat:*
+   pursuing notarization inside a verification phase and turning a browser-run into a credentials task.
+
+- [ ] Identity: `electrobun.config.ts` (`app.name`, `app.identifier`, `app.version`) and `package.json`
+      (`name`, `version`) agree, and the placeholder pair is gone.
+- [ ] `bun run build:canary` produces the bundle, and the **dev** bundle under `build/dev-*` is untouched by
+      it (recorded with `ls`/mtimes, not by assumption).
+- [ ] Launch the packaged app and run the six steps in the manual block below, recording each observation.
+- [ ] `bundleCEF: false` confirmed against the built bundle (no CEF framework shipped) and the app still
+      renders the hybrid editor.
+- [ ] The diagnostics half of decision 5: either `debug.md` is closed and the switches, the
+      `viewContext.heartbeat` field and §10.6's paragraph are removed in one commit — or the item is left
+      **open here with the reason**, rather than silently dropping it. *(`debug.md`'s state at the time this
+      was written: open.)*
+- [ ] `lessons.md`: strike the "never run for this project" entry and record what the first packaged run
+      actually did, including the channel-scoped notebook path.
+
+**Verification** — **manual, by construction** (the dev read-back does not exist in a packaged build), in the
+shape the human verifier asks for: one step, the exact observation, and the failure signature. Run them in
+order; a failure stops the run, because each step's precondition is the previous step's observation.
+
+1. `bun run build:canary` → expect the bundle at `build/canary-macos-arm64/Notes-canary.app` and a fresh
+   archive in `artifacts/`; expect **no** signing/notarization step to be attempted, and `build/dev-*` to keep
+   its previous mtime. *Failure:* the build reports success while nothing appeared under `build/canary-*`; or
+   a `codesign`/notarization error, which means decision 6 has been crossed.
+2. `open build/canary-macos-arm64/Notes-canary.app` → expect the window to open with an **empty** notes list
+   (a first run), and the directory `~/Library/Application Support/<identifier>/canary/notebook/` to exist
+   afterwards. *Failure:* the list shows the dev notebook's notes — the identity change did not take.
+3. Create a note, type into the body, wait a moment past the 500 ms save debounce, then quit → expect exactly
+   one `.md` in the canary notebook directory, named after the slugged title, holding the typed text. *Failure:*
+   nothing on disk, or the file is empty/renamed.
+4. Relaunch the packaged app → expect the note in the list with its title and preview, and its body intact
+   when opened. *Failure:* the note is missing — which, after step 3's file was confirmed, points at the
+   channel-scoped path rather than at the list.
+5. `ls` the dev notebook before and after steps 2–4 → expect it byte-identical. *Failure:* the packaged app
+   wrote into the dev directory (they are sharing `userData`).
+6. Inspect the bundle: no CEF framework under `Contents/Frameworks`, and the hybrid editor still renders
+   markdown (type `# h` and confirm the rendered heading). *Failure:* a missing framework the app needs, or a
+   renderer that no longer mounts.
+7. `HEARTBEAT=1 POKE=1 open …Notes-canary.app` → expect **no** `[hash] hb-…` line anywhere in the run's
+   output: both channels are dev-gated (§10.6), so a packaged build cannot reach them. *Failure:* the leak
+   itself, not the missing lines — a package that ships the diagnostics is the bug this step exists for.
+8. Recorded fact, not a step to pass: `electrobun run` after a canary build launches
+   `build/dev-macos-arm64/Notes-dev.app`. That is the CLI's behaviour (§15.10), it is why step 2 uses `open`,
+   and a future reader who "fixes" step 2 back to `run` should find this sentence.
 
 ---
 

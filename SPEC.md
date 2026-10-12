@@ -200,6 +200,20 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
+**Identity is a placeholder and must change before the first packaged build** (Phase 9's first decision;
+pin recorded 2026-10-07). `app.name` / `app.identifier` above (`Notes` / `com.example.notes`) are
+placeholders, and the identifier is load-bearing in two places that do **not** follow the dev tree:
+`Utils.paths.userData` is `getAppDataDir()/identifier/channel`, so the notebook directory moves with it, and
+the `views://` origin that holds `localStorage` (the theme, §10.5) changes with it too. A canary build
+therefore starts with no notes and no stored theme — expected, and worth knowing before it is mistaken for a
+broken package. *Beat:* keeping the placeholder, which lets two apps — or two channels — share one data
+directory and one notebook.
+
+**`bundleCEF: false` on all three OSes is the pinned ruling** (Phase 9 pre-flight, 2026-10-07): the app
+ships the platform's native webview, not CEF (§15.10). CEF is a *different transport*, and the native one is
+what `debug.md`'s wedge lives in — so flipping `mac.bundleCEF` to `true` is the first experiment if that
+wedge is ever traced to the transport, not a config value to change casually.
+
 `build.bun` and `build.views` accept the full Bun.build option set (plugins,
 external, minify, splitting, define, jsx, …); Electrobun controls the entrypoints,
 outdir and target itself.[3]
@@ -445,6 +459,12 @@ export type NotesRPC = {
       openNote:      { params: { id: string };                      response: NoteMeta | null };
       saveNote:      { params: { id: string; content: string };     response: SaveNoteResult };
       createNote:    { params: { folder: string; title: string };   response: CreateNoteResult };
+      // Phase 8 pre-flight, pinned 2026-10-07 — **not yet in the tree**. The note list's context menu
+      // (§10.2) surfaces the note's own file so a user can find it in the OS file manager; the reason is
+      // measured (lessons.md: the app's author could not locate two freshly created notes). The path is
+      // resolved in bun from the same `NOTEBOOK_DIR` and validated exactly like `openNote`'s id, so the
+      // renderer never holds an absolute path and an id that resolves outside the notebook is refused.
+      revealNote:    { params: { id: string };                      response: MutationResult };
       deleteNote:    { params: { id: string };                      response: MutationResult };
       createFolder:  { params: { parent: string; name: string };    response: CreateFolderResult };
       deleteFolder:  { params: { path: string };                    response: MutationResult };
@@ -576,6 +596,11 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   `not found`, `invalid id`, `invalid name`, `already exists`, `folder not empty`. Reads
   (`getAllNotes`, `getFolders`, `openNote`) return data and use `null` for absence; only genuine bugs
   reject.
+  **Phase 8 pre-flight, pinned 2026-10-07:** those five strings are a **contract** — a small, closed
+  vocabulary the bun layer returns and the renderer maps. The user-facing wording lives in the renderer
+  (`src/mainview/utils/mutationMessage.ts`), where a code plus its subject becomes a sentence; the layer
+  never grows prose-shaped error strings, and a check asserts the code (`#toast[data-message]`, §10.6)
+  rather than the punctuation.
 - **Path safety.** An `id` must be `/`-separated, non-empty, not absolute, free of any `..` segment, and
   after `resolve()` against `NOTEBOOK_DIR` — symlinks included — still inside it. Anything else →
   `{ ok: false, error: "invalid id" }`. Ids are **rejected, never silently normalised**: a normalised id
@@ -791,6 +816,13 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
 - Context menu on folders: New Subfolder, Rename Folder, Delete Folder (only
   when empty). Counts, search scope, drag-and-drop and the theme have their
   semantics pinned in §10.5.
+- **Context menu on notes (Phase 8 pre-flight, pinned 2026-10-07).** Note rows get the same menu shape as
+  folders, with two items: **Delete note**, confirming first through the package's own message box
+  (`Utils.showMessageBox`, measured present in `electrobun@1.18.1`), and **Reveal in Finder**, which calls
+  §7's `revealNote` and hands the absolute path to `Utils.showItemInFolder`. Nothing else joins it — rename
+  is post-MVP (§14), and anything that edits the note belongs in the editor, not the list. `deleteNote` has
+  been wired end to end since Phase 3 with no caller; this menu is what makes it reachable, and it is why
+  Phase 8's checks can assert a visible message for a delete at all.
 
 ### 10.3 Layout & status bar
 - Sidebar + editor pane (~1200 px target width).
@@ -864,18 +896,20 @@ numbered checks under Phase 3's Verification in `todo.md` cannot be judged witho
   rather than the name it sent.
 - **Drafts are invisible to the sidebar.** The notes list shows notes; a draft is not one until it
   materialises.
-- **Toolbar and status bar in Phase 4 are placeholders.** The toolbar renders its action buttons
-  disabled with a tooltip; the status bar renders `—` per field. Phase 4's acceptance is the shell and
-  the sidebar; those two components get their behaviour in Phases 5–7.
+- **Toolbar and status bar in Phase 4 were placeholders** — historical, and retired: the toolbar's
+  always-disabled tooltip state (`PLACEHOLDER_TOOLTIP`) and its behaviour landed in Phase 7, the status
+  bar's in Phase 5. Phase 4's acceptance was the shell and the sidebar, and those two components got their
+  behaviour in Phases 5–7. The wording is kept because Phase 4's checks still read against it.
 
 ### 10.6 Dev-only observation surface (the probe contract)
 
 Every automated check in `todo.md` reads the renderer through the DOM, and this app's editor keeps its
 document outside the DOM — so the hooks below **are** the verification contract, not incidental markup. They
 are additive: no styling or behaviour may depend on them, and a check that needs a new hook adds it here
-first. Everything listed exists in the committed tree except the block marked *(Phase 7)*, which this surface
-pins ahead of that phase so its checks can be written against names rather than invented ones; a rename of any of
-these strings is a contract change, not a refactor.
+first. Each block below is labelled with the phase that added it, and a label reading *(Phase N)* names a
+**contract pinned before that phase's code** — its checks are written against these names rather than
+invented ones, and the phase that implements it commits the code, not the names. A rename of any of these
+strings is a contract change, not a refactor.
 
 **Shell.** `#shell` carries its own state as data attributes, which is why a probe can assert the app's
 selection without reading React state: `data-selected-folder` (`""` = All Notes), `data-selected-note`
@@ -917,6 +951,20 @@ are not package actions (§10.1); the `disabled` **property** while no note and 
 `data-mode` (`"hybrid"` | `"raw"`) plus `aria-pressed` on the preview-mode button. A check selects an action
 **by name** — `#toolbar [data-action="bold"]` — never by index or label: this phase's own list gains Code
 block, and `Code` is a prefix of `Code block`, so a `textContent` match cannot tell the two apart.
+
+**Shell failure surface and empty states (Phase 8's contract — pinned 2026-10-07, not yet in the tree).**
+`#toast` is the app's only failure surface. It exists only while a message is up; it carries `data-tone`
+(`"error"` | `"info"`) and `data-message` (the §9.1 code being reported, so a check asserts the mapping and
+not the wording), its text names the subject that failed, and an error is announced with `role="alert"`.
+Empty states are one primitive carrying a **reason**: `#notes-empty` also carries `data-empty-reason` —
+`"no-notes"` (the notebook holds none), `"folder-empty"` (the selected folder holds none) or
+`"no-matches"` (the search matched none) — because the copy and the "create your first note" affordance
+differ per case while the element does not.
+
+**First paint (same phase).** `index.html` resolves the stored theme *before* the bundle runs, so the
+`data-theme` value written by the shell (§10.5's theme rule, and the **Theme.** rule below) is already the
+user's at the first readable instant, and the shell's effect writes only when the value differs. A reader may
+therefore read the attribute before mount and mean something by it.
 
 **Rendered content (Phase 6's contract — added 2026-10-06).** The hybrid package renders markdown into its
 own DOM inside `.cm-content`, and Phase 6's checks assert *what is rendered* — so these strings are pinned
@@ -966,6 +1014,15 @@ the wedge and retire when the MVP is complete.
 | Mermaid fences | yes | yes | diagrams |
 | Wikilinks / backlinks | — | — | post-MVP |
 
+**One accepted limitation (Phase 8 pre-flight, pinned 2026-10-07): a Mermaid diagram does not follow
+`data-theme`.** Measured in Phase 6: `codemirror-markdown-hybrid@1.2.2` calls `mermaid.initialize` once at
+import with hardcoded **light** theme variables (`primaryColor #f5f5f5`, `edgeLabelBackground #fff`,
+`lineColor #aaa`) and exposes no option for them, so a diagram renders light-ish inside a dark pane while
+everything else follows `<html data-theme>`. The alternative — reaching into the package's own `mermaid`
+instance, re-initialising it per theme and re-rendering the open note's diagrams — is post-MVP (§14), not a
+Phase 8 task: the theme rule covers the hybrid preview, which does follow. Phase 8's job is to say so here,
+in one place, rather than leave it to be rediscovered as a bug.
+
 ---
 
 ## 12. RPC method reference
@@ -1014,7 +1071,9 @@ id, and the selection, the notes list and any open editor must all follow the ne
 reason it is deferred.
 
 Wikilinks + backlinks, tag system, Markdown keyboard shortcuts, graph view,
-export to HTML/PDF.
+export to HTML/PDF. Plus two the MVP accepts explicitly rather than fixes: **Mermaid diagrams following the
+theme** (§11's accepted limitation) and **code signing / notarization** (§15.10; an unsigned local launch is
+what Phase 9 checks).
 
 ---
 
@@ -1051,7 +1110,12 @@ export to HTML/PDF.
 9. **Paths.** Writable data → `Utils.paths.userData`[8]; read-only bundles →
    `PATHS.VIEWS_FOLDER` / `PATHS.RESOURCES_FOLDER`[7]. Never write to `views/`.
 10. **Packaging.** `electrobun build --env=canary|stable`; per-OS `bundleCEF`
-    controls whether CEF ships with the app.[3][12][13] v1 also exposes
+    controls whether CEF ships with the app.[3][12][13] This app pins `false` on all three OSes (§4.1), and
+    a packaged build is **launched from its own path**, never through the CLI's `run` command: `run` calls
+    `runApp`, which hardcodes `buildEnvironment = "dev"` (`src/cli/index.ts`, measured 2026-10-07), so it can
+    only ever start `build/dev-<os>-<arch>/Notes-dev.app`. Canary output lands in
+    `build/canary-<os>-<arch>/Notes-canary.app` (`getPlatformPrefix` = `${env}-${os}-${arch}`,
+    `getAppFileName` = `<name>-<env>`). v1 also exposes
     build-only fields such as `useAsar`, `asarUnpack` and `bunVersion`.[3]
 11. **Watch mode's coverage is narrower than "watches view sources" suggests — measured.**
     `electrobun dev --watch` prints the roots it watches at startup: on this config exactly
